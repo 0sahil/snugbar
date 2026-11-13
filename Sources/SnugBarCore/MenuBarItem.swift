@@ -41,7 +41,7 @@ public struct MenuBarItem: Codable, Equatable, Hashable, Sendable, Identifiable 
     public var ownerPID: Int32
     /// Localised name of the owning app.
     public var appName: String
-    /// App name plus the item's description when there is one ("Stats: CPU").
+    /// App name plus the item's description when there is one ("Meters: CPU").
     public var displayName: String
     public var frame: Rect
     /// Apple's own items (`com.apple.menuextra.*`): clock, Control Center, Wi-Fi and so on.

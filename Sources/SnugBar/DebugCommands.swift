@@ -109,8 +109,9 @@ struct DebugRunner {
         case "close-overflow": return await closeOverflow()
         case "expanded-row": return await expandedRow()
         case "row-state": return await rowState()
+        case "input": return try await input()
         default:
-            throw Failure("unknown command '\(invocation.command)'; use status, list, hide, click, move, capture or order-file")
+            throw Failure("unknown command '\(invocation.command)'; use status, list, hide, click, move, capture, order-file or input")
         }
     }
 
@@ -460,4 +461,71 @@ private struct AnyEncodable: Encodable {
     let value: any Encodable
     init(_ value: any Encodable) { self.value = value }
     func encode(to encoder: Encoder) throws { try value.encode(to: encoder) }
+}
+
+// MARK: - input
+
+/// `input key <keycode> [ctrl] [opt] [cmd] [shift]`, `input click <x> <y>`, `input move <x> <y>`,
+/// `input scroll <dy> <x> <y>`: synthetic HID events for on-device tests of hotkeys and menu bar gestures.
+/// Coordinates are global, top-left. The pointer is left where the event put it.
+extension DebugRunner {
+    struct InputResult: Encodable {
+        var posted: String
+    }
+
+    fileprivate func input() async throws -> InputResult {
+        try requireAccessibility()
+        let args = invocation.positional()
+        guard let kind = args.first else { throw Failure("input needs key, click, move or scroll") }
+        func number(_ i: Int) throws -> Double {
+            guard i < args.count, let v = Double(args[i]) else { throw Failure("input \(kind): argument \(i) missing or not a number") }
+            return v
+        }
+        let source = CGEventSource(stateID: .hidSystemState)
+        func mouse(_ type: CGEventType, _ p: CGPoint) {
+            CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
+        }
+        switch kind {
+        case "key":
+            let code = CGKeyCode(try number(1))
+            var flags: CGEventFlags = []
+            for m in args.dropFirst(2) {
+                switch m {
+                case "ctrl": flags.insert(.maskControl)
+                case "opt": flags.insert(.maskAlternate)
+                case "cmd": flags.insert(.maskCommand)
+                case "shift": flags.insert(.maskShift)
+                default: throw Failure("unknown modifier '\(m)'")
+                }
+            }
+            for down in [true, false] {
+                let e = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down)
+                e?.flags = flags
+                e?.post(tap: .cghidEventTap)
+                try? await Task.sleep(nanoseconds: 30_000_000)
+            }
+        case "click":
+            let p = CGPoint(x: try number(1), y: try number(2))
+            mouse(.mouseMoved, p)
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            mouse(.leftMouseDown, p)
+            try? await Task.sleep(nanoseconds: 30_000_000)
+            mouse(.leftMouseUp, p)
+        case "move":
+            mouse(.mouseMoved, CGPoint(x: try number(1), y: try number(2)))
+        case "scroll":
+            let dy = Int32(try number(1))
+            mouse(.mouseMoved, CGPoint(x: try number(2), y: try number(3)))
+            for _ in 0..<5 {
+                try? await Task.sleep(nanoseconds: 20_000_000)
+                CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 1, wheel1: dy, wheel2: 0, wheel3: 0)?
+                    .post(tap: .cghidEventTap)
+            }
+        default:
+            throw Failure("input needs key, click, move or scroll")
+        }
+        // Give the events time to be delivered before the process exits.
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        return InputResult(posted: args.joined(separator: " "))
+    }
 }

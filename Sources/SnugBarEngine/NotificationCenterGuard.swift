@@ -5,8 +5,9 @@ import SnugBarCore
 ///
 /// While the assertion is active, a click on the clock doesn't open Notification Center. The guard watches for a
 /// left mouse-down on the clock's frame, lifts the hide, and re-applies it as soon as a Notification Center window
-/// appears (the panel stays open). If no panel appears within 400 ms, it presses the clock through Accessibility.
-/// A click that closes an already open panel is left alone. Cost: hidden icons flash for about 0.3 s.
+/// appears (the panel stays open). The original click never gets through, so the guard replays it on the clock after
+/// `pressDelay`, and once more after `retryDelay` if needed. A click that closes an already open panel is left alone.
+/// Cost: hidden icons flash briefly while the hide is lifted.
 @MainActor
 public final class NotificationCenterGuard {
     public struct Event: Codable, Sendable {
@@ -17,8 +18,11 @@ public final class NotificationCenterGuard {
     public private(set) var events: [Event] = []
     public private(set) var isRunning = false
 
-    /// Wait this long for the panel before pressing the clock.
-    public var pressDelay: TimeInterval = 0.4
+    /// Wait this long for the panel before replaying the click. The user's own click never gets through while hidden
+    /// (verified on 27.2), so this only needs to cover the time the system takes to lift the hide.
+    public var pressDelay: TimeInterval = 0.06
+    /// If the panel still hasn't appeared (the hide was lifted late), replay once more at this point.
+    public var retryDelay: TimeInterval = 0.5
     /// Give up and re-hide after this long.
     public var giveUpAfter: TimeInterval = 2.0
 
@@ -26,8 +30,8 @@ public final class NotificationCenterGuard {
     private let reader: MenuBarReader
     private var monitor: Any?
     private var clockFrame: CGRect?
-    private var clockFrameReadAt = Date.distantPast
     private var screenObserver: NSObjectProtocol?
+    private var refreshTimer: Timer?
     private var handling = false
 
     public init(hider: AssessmentHider, reader: MenuBarReader) {
@@ -46,7 +50,11 @@ public final class NotificationCenterGuard {
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.clockFrameReadAt = .distantPast }
+            MainActor.assumeIsolated { self?.refreshClockFrame() }
+        }
+        // Reading the menu bar takes tens of milliseconds, so keep the clock's frame fresh off the click path.
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshClockFrame() }
         }
         log(monitor == nil ? "global mouse monitor not installed" : "started; clock frame \(clockFrame.map { "\($0)" } ?? "unknown")")
     }
@@ -54,17 +62,21 @@ public final class NotificationCenterGuard {
     public func stop() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
+        refreshTimer?.invalidate()
         monitor = nil
         screenObserver = nil
+        refreshTimer = nil
         isRunning = false
     }
 
     // MARK: - Private
 
     private func refreshClockFrame() {
+        guard !handling else { return }
         let snapshot = reader.snapshot()
-        clockFrame = snapshot.items.first { $0.axIdentifier == AppleItems.clockIdentifier }?.frame.cgRect
-        clockFrameReadAt = Date()
+        if let frame = snapshot.items.first(where: { $0.axIdentifier == AppleItems.clockIdentifier })?.frame.cgRect {
+            clockFrame = frame
+        }
     }
 
     private func mouseDown(at location: CGPoint?) {
@@ -72,8 +84,7 @@ public final class NotificationCenterGuard {
         let point = location ?? MenuBarGeometry.topLeftPoint(
             fromCocoa: NSEvent.mouseLocation, primaryScreenHeight: NSScreen.screens.first?.frame.height ?? 0
         )
-        // The clock rarely moves; re-read its frame at most every 5 s, or after a screen change.
-        if clockFrame == nil || Date().timeIntervalSince(clockFrameReadAt) > 5 { refreshClockFrame() }
+        if clockFrame == nil { refreshClockFrame() }
         guard let frame = clockFrame, MenuBarGeometry.hit(point, in: frame) else { return }
 
         if NotificationCenterDetector.isPanelOpenNow() {
@@ -91,36 +102,35 @@ public final class NotificationCenterGuard {
 
     private func waitForPanel() async {
         let start = Date()
-        var pressed = false
+        var replays = [pressDelay, retryDelay]
         while Date().timeIntervalSince(start) < giveUpAfter {
             if NotificationCenterDetector.isPanelOpenNow() {
                 hider.resume()
                 log(String(format: "panel open after %.0f ms; hide re-applied", Date().timeIntervalSince(start) * 1000))
                 return
             }
-            if !pressed, Date().timeIntervalSince(start) >= pressDelay {
-                pressed = true
-                pressClock()
+            if let next = replays.first, Date().timeIntervalSince(start) >= next {
+                replays.removeFirst()
+                replayClick(after: next)
             }
-            try? await Task.sleep(nanoseconds: 50_000_000)
+            try? await Task.sleep(nanoseconds: 20_000_000)
         }
         hider.resume()
         log("no panel within \(giveUpAfter) s; hide re-applied")
     }
 
-    private func pressClock() {
-        guard let entry = reader.snapshot().entries.first(where: { $0.item.axIdentifier == AppleItems.clockIdentifier }) else {
-            log("no panel after \(Int(pressDelay * 1000)) ms; clock element not found")
+    private func replayClick(after delay: TimeInterval) {
+        guard let frame = clockFrame else {
+            log("no panel after \(Int(delay * 1000)) ms; clock frame unknown")
             return
         }
         // AXPress on the clock is rejected on macOS 27.2 (-25206), so replay the click. The user's pointer is already
         // on the clock (that is how we got here); the guard's own monitor ignores it because `handling` is set.
-        let frame = entry.item.frame.cgRect
         let before = SyntheticInput.pointer
         let target = MenuBarGeometry.hit(before, in: frame) ? before : CGPoint(x: frame.midX, y: frame.midY)
         SyntheticInput.click(at: target)
         if target != before { SyntheticInput.restorePointer(before) }
-        log("no panel after \(Int(pressDelay * 1000)) ms; replayed the click on the clock")
+        log("no panel after \(Int(delay * 1000)) ms; replayed the click on the clock")
     }
 
     private func log(_ message: String) {

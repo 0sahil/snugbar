@@ -17,6 +17,21 @@ public enum MenuBarGeometry {
         CGPoint(x: point.x, y: primaryScreenHeight - point.y)
     }
 
+    /// Converts a rect from AppKit coordinates to global top-left coordinates.
+    public static func topLeftRect(fromCocoa rect: CGRect, primaryScreenHeight: CGFloat) -> CGRect {
+        CGRect(x: rect.minX, y: primaryScreenHeight - rect.maxY, width: rect.width, height: rect.height)
+    }
+
+    /// The menu bar strip of a screen, in global top-left coordinates. The bar's height is the gap between the screen's
+    /// top and its visible frame; when the bar auto-hides that gap is zero, so `fallbackHeight` is used.
+    public static func menuBarStrip(
+        screenFrame: CGRect, visibleFrame: CGRect, primaryScreenHeight: CGFloat, fallbackHeight: CGFloat
+    ) -> CGRect {
+        let gap = screenFrame.maxY - visibleFrame.maxY
+        let height = gap > 0 ? gap : fallbackHeight
+        return CGRect(x: screenFrame.minX, y: primaryScreenHeight - screenFrame.maxY, width: screenFrame.width, height: height)
+    }
+
     /// Hit test with a small tolerance, in top-left coordinates.
     public static func hit(_ point: CGPoint, in frame: CGRect, tolerance: CGFloat = 2) -> Bool {
         frame.insetBy(dx: -tolerance, dy: -tolerance).contains(point)

@@ -24,6 +24,8 @@ let package = Package(
                 .linkedFramework("AppKit"),
                 .linkedFramework("ApplicationServices"),
                 .linkedFramework("ScreenCaptureKit"),
+                .linkedFramework("Carbon"),
+                .linkedFramework("ServiceManagement"),
             ]
         ),
         .executableTarget(

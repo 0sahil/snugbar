@@ -11,5 +11,11 @@ if let invocation = DebugInvocation(arguments: CommandLine.arguments) {
     }
     app.run()
 } else {
-    SnugBarApp.main()
+    let app = NSApplication.shared
+    let delegate = MainActor.assumeIsolated { AppDelegate() }
+    app.delegate = delegate
+    app.setActivationPolicy(.accessory)
+    // `NSApplication.delegate` is weak and Swift may release a local after its last use, so keep the delegate (and
+    // everything it owns) alive for the whole run.
+    withExtendedLifetime(delegate) { app.run() }
 }

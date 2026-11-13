@@ -78,7 +78,7 @@ public final class ItemActivator {
         defer { if allowed { scheduleEndFocus(frame: entry.item.frame.cgRect) } }
 
         // 2. The app's own extras menu bar. Verified on macOS 27.2: AXPress here returns success and highlights the
-        // item but does NOT open the menu for third-party apps (Tailscale, Slack, Wickbar), so it is opt-in only.
+        // item but does NOT open the menu for third-party apps (tested with several native and Electron apps), so it is opt-in only.
         let preferAX = ProcessInfo.processInfo.environment["SNUGBAR_CLICK_METHOD"] == "ax"
         if preferAX, entry.item.ownerPID > 0, let element = extrasElement(for: entry) {
             for action in [kAXPressAction, "AXShowMenu"] where AX.actions(element).contains(action) {
