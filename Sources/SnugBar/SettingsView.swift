@@ -50,6 +50,19 @@ private struct GeneralSettings: View {
                 }
             }
 
+            Section {
+                Picker("Show hidden items in", selection: setting(controller, \.revealIn)) {
+                    Text("SnugBar Bar").tag(RevealDestination.snugBarBar)
+                    Text("Menu bar").tag(RevealDestination.menuBar)
+                }
+                Toggle("Move items that don’t fit into Hidden", isOn: setting(controller, \.moveItemsThatDontFit))
+            } header: {
+                Text("Hidden items")
+            } footer: {
+                Text("The SnugBar Bar opens below the menu bar. Items that don’t fit beside the notch are listed there under “Didn’t Fit” instead of going behind the system’s overflow button.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+
             Section("Hide again automatically") {
                 Toggle("After a delay", isOn: setting(controller, \.autoCollapse.enabled))
                 if controller.settings.autoCollapse.enabled {
@@ -199,8 +212,11 @@ private struct ShortcutSettings: View {
                 row("Show or hide hidden items", .toggleHidden)
                 row("Show or hide always-hidden items", .toggleAlwaysHidden)
                 row("Swap shown and hidden items", .swap)
+                row("Search menu bar items", .search)
+                row("Open an item by letter", .openByLetter)
+                row("Turn Zen mode on or off", .zen)
             } footer: {
-                Text("Shortcuts work in every app. Use at least one of ⌃ ⌥ ⌘, or a function key.")
+                Text("Shortcuts work in every app. Use at least one of ⌃ ⌥ ⌘, or a function key. While Zen mode is on, only its own shortcut works.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             if !controller.hotkeyFailures.isEmpty {

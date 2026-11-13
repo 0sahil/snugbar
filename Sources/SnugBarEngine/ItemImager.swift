@@ -18,6 +18,9 @@ public final class ItemImager {
     public struct ItemImage {
         public let image: CGImage
         public let source: Source
+        /// A one-colour glyph to draw tinted with the label colour (captured pictures only; app icons are never
+        /// templates).
+        public let isTemplate: Bool
     }
 
     public enum CaptureError: Error, CustomStringConvertible {
@@ -34,11 +37,29 @@ public final class ItemImager {
         }
     }
 
-    private var cache: [ItemID: CGImage] = [:]
+    /// Keyed pictures (bar background removed), by the ID they were captured or loaded under.
+    private var cache: [ItemID: GlyphImage.Keyed] = [:]
+    /// IDs whose picture holds nothing once the background is keyed out (a blank capture).
+    private var blank: Set<ItemID> = []
     /// Duration of the last strip capture, for diagnostics.
     public private(set) var lastCaptureDuration: TimeInterval?
+    /// When set, captured images are also kept here as PNG files (one per item), so hidden items keep their image
+    /// across launches. Hidden items can't be captured, so without this they would show app icons after a relaunch.
+    /// Files hold the raw crop, bar background included; the background is keyed out when a file is loaded, so files
+    /// written by earlier versions work unchanged.
+    public let cacheDirectory: URL?
 
-    public init() {}
+    public init(cacheDirectory: URL? = nil) {
+        self.cacheDirectory = cacheDirectory
+    }
+
+    /// `~/Library/Caches/<bundle id>/ItemImages`.
+    public static var defaultCacheDirectory: URL {
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Caches")
+        return base.appendingPathComponent(Bundle.main.bundleIdentifier ?? "app.snugbar.SnugBar", isDirectory: true)
+            .appendingPathComponent("ItemImages", isDirectory: true)
+    }
 
     /// Captures the strip and refreshes the cache for every visible item. Returns the IDs captured.
     @discardableResult
@@ -87,24 +108,81 @@ public final class ItemImager {
                 .integral
                 .intersection(CGRect(x: 0, y: 0, width: strip.width, height: strip.height))
             guard !crop.isEmpty, let image = strip.cropping(to: crop) else { continue }
-            cache[item.id] = image
+            store(GlyphImage.keyed(image), for: item.id)
             captured.append(item.id)
+            if let url = diskURL(for: item.id), let png = image.pngData() {
+                try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? png.write(to: url, options: .atomic)
+            }
         }
         return captured
     }
 
     /// Best available image: captured this round, else cached, else the app icon.
-    public func image(for item: MenuBarItem, capturedNow: Set<ItemID> = []) -> ItemImage? {
-        if let image = cache[item.id] {
-            return ItemImage(image: image, source: capturedNow.contains(item.id) ? .captured : .cached)
+    /// - Parameter orderPositions: the order file, so a picture saved under the item's other ID is found too (see
+    ///   `ItemIdentityResolver.equivalentIDs`).
+    public func image(for item: MenuBarItem, capturedNow: Set<ItemID> = [], orderPositions: [String: Double]? = nil) -> ItemImage? {
+        if let (id, keyed) = keyedImage(for: item.id, orderPositions: orderPositions) {
+            let fresh = capturedNow.contains(item.id) || capturedNow.contains(id)
+            return ItemImage(image: keyed.image, source: fresh ? .captured : .cached, isTemplate: keyed.isTemplate)
         }
         guard let icon = Self.appIcon(for: item) else { return nil }
-        return ItemImage(image: icon, source: .appIcon)
+        return ItemImage(image: icon, source: .appIcon, isTemplate: false)
     }
 
-    public func clearCache() { cache.removeAll() }
+    /// The cached picture (memory, then disk) under the ID or one of its equivalents, with the ID it was found
+    /// under. Never captures.
+    public func keyedImage(for id: ItemID, orderPositions: [String: Double]? = nil) -> (ItemID, GlyphImage.Keyed)? {
+        for candidate in [id] + ItemIdentityResolver.equivalentIDs(of: id, orderPositions: orderPositions) {
+            if let keyed = load(candidate) { return (candidate, keyed) }
+        }
+        return nil
+    }
 
-    static func appIcon(for item: MenuBarItem, size: CGFloat = 64) -> CGImage? {
+    /// Whether a picture is cached for the item (under any of its IDs), without loading it.
+    public func hasCachedImage(for id: ItemID, orderPositions: [String: Double]? = nil) -> Bool {
+        ([id] + ItemIdentityResolver.equivalentIDs(of: id, orderPositions: orderPositions)).contains { candidate in
+            if cache[candidate] != nil { return true }
+            if blank.contains(candidate) { return false }
+            guard let url = diskURL(for: candidate) else { return false }
+            return FileManager.default.fileExists(atPath: url.path)
+        }
+    }
+
+    /// Clears the memory cache (files on disk stay).
+    public func clearCache() {
+        cache.removeAll()
+        blank.removeAll()
+    }
+
+    private func load(_ id: ItemID) -> GlyphImage.Keyed? {
+        if let keyed = cache[id] { return keyed }
+        guard !blank.contains(id), let url = diskURL(for: id), let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let raw = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else { return nil }
+        let keyed = GlyphImage.keyed(raw)
+        store(keyed, for: id)
+        return keyed
+    }
+
+    private func store(_ keyed: GlyphImage.Keyed?, for id: ItemID) {
+        if let keyed {
+            cache[id] = keyed
+            blank.remove(id)
+        } else {
+            cache.removeValue(forKey: id)
+            blank.insert(id)
+        }
+    }
+
+    private func diskURL(for id: ItemID) -> URL? {
+        guard let cacheDirectory else { return nil }
+        let safe = String(id.rawValue.map { $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_" ? $0 : "_" })
+        return cacheDirectory.appendingPathComponent(safe + ".png")
+    }
+
+    /// The owning app's icon (running app first, else the installed app).
+    public static func appIcon(for item: MenuBarItem, size: CGFloat = 64) -> CGImage? {
         var icon: NSImage?
         if item.ownerPID > 0 { icon = NSRunningApplication(processIdentifier: item.ownerPID)?.icon }
         if icon == nil, !item.ownerBundleID.isEmpty,

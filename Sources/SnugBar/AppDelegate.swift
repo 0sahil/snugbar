@@ -28,6 +28,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             button.setAccessibilityLabel("SnugBar")
         }
         self.item = item
+        controller.iconFrame = { [weak self] in
+            guard let item = self?.item, item.isVisible, let window = item.button?.window else { return nil }
+            return window.frame
+        }
         controller.$state.combineLatest(controller.$lastError)
             .sink { [weak self] state, error in self?.updateIcon(state: state, hasError: error != nil) }
             .store(in: &cancellables)
@@ -43,6 +47,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let symbol: String
         if !controller.accessibilityGranted || hasError {
             symbol = "exclamationmark.triangle"
+        } else if state.zen {
+            symbol = "eye.slash"
         } else if state.swapped && state.reveal == .collapsed {
             symbol = "arrow.left.arrow.right"
         } else {
@@ -55,13 +61,18 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "SnugBar")
         image?.isTemplate = true
         item?.button?.image = image
-        item?.button?.toolTip = state.reveal == .collapsed ? "SnugBar: click to show hidden items" : "SnugBar: click to hide items"
+        if state.zen {
+            item?.button?.toolTip = "SnugBar: Zen mode is on. Click for the menu."
+        } else {
+            item?.button?.toolTip = state.reveal == .collapsed ? "SnugBar: click to show hidden items" : "SnugBar: click to hide items"
+        }
     }
 
     @objc private func clicked(_ sender: NSStatusBarButton) {
         guard let event = NSApp.currentEvent else { return }
         let wantsMenu = event.type == .rightMouseUp || event.modifierFlags.contains(.control) || event.modifierFlags.contains(.option)
-        if wantsMenu {
+        // In Zen nothing can be revealed, so a click offers the menu (and the way out of Zen).
+        if wantsMenu || controller.state.zen {
             showMenu()
         } else {
             controller.toggle()
@@ -83,14 +94,25 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let c = controller
         let state = c.state
 
-        menu.addItem(entry(state.reveal == .collapsed ? "Show Hidden Items" : "Hide Items", key: hotkeyHint(.toggleHidden)) { c.toggle() })
-        menu.addItem(entry(state.reveal == .all ? "Hide Always Hidden Items" : "Show Always Hidden Items", key: hotkeyHint(.toggleAlwaysHidden)) {
+        let show = entry(state.reveal == .collapsed ? "Show Hidden Items" : "Hide Items", key: hotkeyHint(.toggleHidden)) { c.toggle() }
+        show.isEnabled = !state.zen
+        menu.addItem(show)
+        let always = entry(state.reveal == .all ? "Hide Always Hidden Items" : "Show Always Hidden Items", key: hotkeyHint(.toggleAlwaysHidden)) {
             c.toggleAlwaysHidden()
-        })
+        }
+        always.isEnabled = !state.zen
+        menu.addItem(always)
         let swap = entry("Swap Shown and Hidden", key: hotkeyHint(.swap)) { c.swap() }
         swap.state = state.swapped ? .on : .off
-        swap.isEnabled = c.supportsSwap
+        swap.isEnabled = c.supportsSwap && !state.zen
         menu.addItem(swap)
+        // After the menu has closed, so the palette can take keyboard focus.
+        let search = entry("Search…", key: hotkeyHint(.search)) { DispatchQueue.main.async { c.showSearch() } }
+        search.isEnabled = !state.zen
+        menu.addItem(search)
+        let zen = entry("Zen Mode", key: hotkeyHint(.zen)) { c.toggleZen() }
+        zen.state = state.zen ? .on : .off
+        menu.addItem(zen)
 
         menu.addItem(.separator())
         menu.addItem(info(c.backendDescription))

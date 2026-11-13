@@ -10,6 +10,14 @@ public enum HiderPreference: String, Codable, CaseIterable, Sendable {
     case overflowDivider
 }
 
+/// Where revealed Hidden (and Always hidden) items appear (feature 24).
+public enum RevealDestination: String, Codable, CaseIterable, Sendable {
+    /// The menu bar shows them in place.
+    case menuBar
+    /// SnugBar's own panel under the menu bar lists them; the menu bar stays as it is.
+    case snugBarBar
+}
+
 /// SnugBar's settings file. Unknown keys are ignored and missing keys take their defaults, so older and newer
 /// files of the same schema version load.
 public struct Settings: Codable, Equatable, Sendable {
@@ -25,6 +33,13 @@ public struct Settings: Codable, Equatable, Sendable {
     public var hotkeys: HotkeySettings
     /// Apps seen with a menu bar item: bundle ID -> app name. Lets Settings list apps while they're hidden.
     public var knownApps: [String: String]
+    /// Where revealed items appear (feature 24).
+    public var revealIn: RevealDestination
+    /// Move the leftmost shown apps out of the menu bar when they don't fit beside the notch, and list them in the
+    /// SnugBar Bar under "Didn't fit" (features 17–18).
+    public var moveItemsThatDontFit: Bool
+    /// Items opened from the SnugBar Bar, search or by letter, most recent first (feature 28).
+    public var recentItems: [ItemID]
 
     public init(
         schemaVersion: Int = Settings.currentSchemaVersion,
@@ -34,7 +49,10 @@ public struct Settings: Codable, Equatable, Sendable {
         autoCollapse: AutoCollapseSettings = AutoCollapseSettings(),
         reveal: RevealSettings = RevealSettings(),
         hotkeys: HotkeySettings = HotkeySettings(),
-        knownApps: [String: String] = [:]
+        knownApps: [String: String] = [:],
+        revealIn: RevealDestination = .snugBarBar,
+        moveItemsThatDontFit: Bool = true,
+        recentItems: [ItemID] = []
     ) {
         self.schemaVersion = schemaVersion
         self.sections = sections
@@ -44,6 +62,9 @@ public struct Settings: Codable, Equatable, Sendable {
         self.reveal = reveal
         self.hotkeys = hotkeys
         self.knownApps = knownApps
+        self.revealIn = revealIn
+        self.moveItemsThatDontFit = moveItemsThatDontFit
+        self.recentItems = recentItems
     }
 
     /// A fresh install: every third-party app hidden, no hotkeys, no personal data.
@@ -51,6 +72,7 @@ public struct Settings: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion, sections, hider, showIcon, autoCollapse, reveal, hotkeys, knownApps
+        case revealIn, moveItemsThatDontFit, recentItems
     }
 
     public init(from decoder: Decoder) throws {
@@ -63,6 +85,14 @@ public struct Settings: Codable, Equatable, Sendable {
         reveal = try c.decodeIfPresent(RevealSettings.self, forKey: .reveal) ?? RevealSettings()
         hotkeys = try c.decodeIfPresent(HotkeySettings.self, forKey: .hotkeys) ?? HotkeySettings()
         knownApps = try c.decodeIfPresent([String: String].self, forKey: .knownApps) ?? [:]
+        revealIn = try c.decodeIfPresent(RevealDestination.self, forKey: .revealIn) ?? .snugBarBar
+        moveItemsThatDontFit = try c.decodeIfPresent(Bool.self, forKey: .moveItemsThatDontFit) ?? true
+        recentItems = try c.decodeIfPresent([ItemID].self, forKey: .recentItems) ?? []
+    }
+
+    /// Records that an item was opened: it moves to the front of `recentItems`, which keeps `RecentItems.limit`.
+    public mutating func noteRecent(_ id: ItemID) {
+        recentItems = RecentItems.noting(id, in: recentItems)
     }
 
     /// Records apps seen in the menu bar. Returns true when something changed.

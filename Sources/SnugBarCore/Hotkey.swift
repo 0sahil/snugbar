@@ -62,18 +62,34 @@ public enum HotkeyAction: String, Codable, CaseIterable, Sendable {
     case toggleAlwaysHidden
     /// Swap Shown and Hidden (feature 7).
     case swap
+    /// Open the search palette (feature 25).
+    case search
+    /// Open the SnugBar Bar with a letter on each item; typing the letter opens it (feature 16).
+    case openByLetter
+    /// Turn Zen mode on or off (feature 54). The only shortcut that works while Zen is on.
+    case zen
 }
 
 /// One optional hotkey per action. Nothing is bound on a fresh install, so SnugBar never steals a shortcut.
+/// Every field is optional, so files written before an action existed load with it unbound.
 public struct HotkeySettings: Codable, Equatable, Sendable {
     public var toggleHidden: Hotkey?
     public var toggleAlwaysHidden: Hotkey?
     public var swap: Hotkey?
+    public var search: Hotkey?
+    public var openByLetter: Hotkey?
+    public var zen: Hotkey?
 
-    public init(toggleHidden: Hotkey? = nil, toggleAlwaysHidden: Hotkey? = nil, swap: Hotkey? = nil) {
+    public init(
+        toggleHidden: Hotkey? = nil, toggleAlwaysHidden: Hotkey? = nil, swap: Hotkey? = nil,
+        search: Hotkey? = nil, openByLetter: Hotkey? = nil, zen: Hotkey? = nil
+    ) {
         self.toggleHidden = toggleHidden
         self.toggleAlwaysHidden = toggleAlwaysHidden
         self.swap = swap
+        self.search = search
+        self.openByLetter = openByLetter
+        self.zen = zen
     }
 
     public subscript(action: HotkeyAction) -> Hotkey? {
@@ -82,6 +98,9 @@ public struct HotkeySettings: Codable, Equatable, Sendable {
             case .toggleHidden: return toggleHidden
             case .toggleAlwaysHidden: return toggleAlwaysHidden
             case .swap: return swap
+            case .search: return search
+            case .openByLetter: return openByLetter
+            case .zen: return zen
             }
         }
         set {
@@ -89,6 +108,9 @@ public struct HotkeySettings: Codable, Equatable, Sendable {
             case .toggleHidden: toggleHidden = newValue
             case .toggleAlwaysHidden: toggleAlwaysHidden = newValue
             case .swap: swap = newValue
+            case .search: search = newValue
+            case .openByLetter: openByLetter = newValue
+            case .zen: zen = newValue
             }
         }
     }

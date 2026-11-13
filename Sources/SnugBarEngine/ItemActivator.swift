@@ -39,7 +39,10 @@ public final class ItemActivator {
     private let hider: AssessmentHider?
     public var appearTimeout: TimeInterval = 1.5
     /// Delay before re-hiding a temporarily allowed app after the user clicks elsewhere.
-    public var rehideDelay: TimeInterval = 1.0
+    public var rehideDelay: TimeInterval = 0.3
+    /// Called after a hidden item has been focused into view and before it is clicked, with the item as it is now and
+    /// every item on screen at that moment. Lets the app capture a picture of an item that is otherwise never visible.
+    public var beforeClick: (@MainActor (MenuBarItem, [MenuBarItem]) async -> Void)?
     private var rehideMonitors: [String: Any] = [:]
 
     public init(reader: MenuBarReader, hider: AssessmentHider?) {
@@ -70,9 +73,14 @@ public final class ItemActivator {
                 throw ActivationError.itemDidNotAppear(item.id)
             }
             try? await Task.sleep(nanoseconds: 150_000_000) // let the bar settle after reflowing
-            entry = reader.snapshot(orderPositions: orderPositions).entries.first {
+            let settled = reader.snapshot(orderPositions: orderPositions)
+            entry = settled.entries.first {
                 $0.item.ownerBundleID == item.ownerBundleID && $0.indexInApp == (entry?.indexInApp ?? 0) && !$0.item.isOverflowed
             } ?? entry
+            if let beforeClick, let focused = entry?.item {
+                // Only the focused apps and Apple's items are on screen now; other entries may be stale.
+                await beforeClick(focused, settled.items.filter { $0.isAppleItem || focus.contains($0.ownerBundleID) })
+            }
         }
         guard let entry else { throw ActivationError.itemDidNotAppear(item.id) }
         defer { if allowed { scheduleEndFocus(frame: entry.item.frame.cgRect) } }
@@ -114,10 +122,14 @@ public final class ItemActivator {
             detail = "opened overflow, synthetic click"
         }
         let restoreDelay = UInt64(ProcessInfo.processInfo.environment["SNUGBAR_RESTORE_DELAY_MS"].flatMap(UInt64.init) ?? 60)
+        // The pointer has to travel to the item: on macOS 27.2 clicks posted to MenuBarAgent's or the owner's pid are
+        // ignored, and a session-tap click moves the pointer too. Hide it for the round trip so the jump isn't seen.
+        let hidden = SyntheticInput.hidePointer()
         SyntheticInput.click(at: CGPoint(x: target.midX, y: target.midY))
         // MenuBarAgent hit-tests against the live pointer, so let the click land before moving the pointer back.
         try? await Task.sleep(nanoseconds: restoreDelay * 1_000_000)
         SyntheticInput.restorePointer(before)
+        if hidden { SyntheticInput.showPointer(); detail += ", pointer hidden" }
         return Result(method: .event, detail: detail, pointerBefore: PointerPosition(before),
                       pointerAfter: PointerPosition(SyntheticInput.pointer), temporarilyAllowed: allowed)
     }

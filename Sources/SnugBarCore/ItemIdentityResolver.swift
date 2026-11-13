@@ -97,6 +97,34 @@ public enum ItemIdentityResolver {
         String(name.lowercased().unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map(Character.init))
     }
 
+    /// Other IDs the same item may have been seen under, matched by bundle ID and position in the app.
+    ///
+    /// An item gets its `status:` ID when it can be matched with the order file, and the fallback `<bundle>#<index>`
+    /// otherwise (for example while its app is hidden). The app's order-file keys, left to right, give the index:
+    /// `<bundle>#n` is the n-th key and the n-th key is `<bundle>#n`. Nothing is returned when the keys' order is
+    /// ambiguous (equal positions) or there is no order file.
+    public static func equivalentIDs(of id: ItemID, orderPositions: [String: Double]?) -> [ItemID] {
+        guard let positions = orderPositions else { return [] }
+        let bundle: String
+        switch id.kind {
+        case let .status(b, _): bundle = b
+        case let .indexed(owner, _): bundle = owner
+        case .module, .other: return []
+        }
+        guard let keys = partition(positions).status[bundle] else { return [] }
+        let sorted = keys.sorted { $0.position > $1.position }
+        guard Set(sorted.map(\.position)).count == sorted.count else { return [] }
+        switch id.kind {
+        case let .indexed(_, index):
+            return index >= 0 && index < sorted.count ? [ItemID(rawValue: sorted[index].key)] : []
+        case .status:
+            guard let index = sorted.firstIndex(where: { $0.key == id.rawValue }) else { return [] }
+            return [.indexed(owner: bundle, index: index)]
+        case .module, .other:
+            return []
+        }
+    }
+
     // MARK: - Private
 
     struct KeyedPosition { let key: String; let position: Double }

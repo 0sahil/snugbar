@@ -25,6 +25,8 @@ public final class MenuBarEventMonitor {
     /// Bundle IDs whose items are currently on screen. Hidden apps' items can linger in the Accessibility tree with
     /// stale frames, so items of other apps don't count when deciding whether a point is empty. Nil means all count.
     public var visibleBundleFilter: ((String) -> Bool)?
+    /// While this returns true no gesture is reported (an item is being opened: the pointer and the bar are SnugBar's).
+    public var isPaused: (() -> Bool)?
 
     public private(set) var options = Options()
 
@@ -49,6 +51,8 @@ public final class MenuBarEventMonitor {
         if options.scroll { mask.insert(.scrollWheel) }
         guard !mask.isEmpty else { return }
         if let m = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] event in
+            // SnugBar's own synthetic clicks (opening an item) are not gestures.
+            if SyntheticInput.isOwn(event.cgEvent) { return }
             let type = event.type
             let location = event.cgEvent?.location
             // Scroll properties raise an exception on other event types (and AppKit swallows it silently).
@@ -82,6 +86,11 @@ public final class MenuBarEventMonitor {
     // MARK: - Events
 
     private func handle(_ type: NSEvent.EventType, location: CGPoint?, deltaY: Double, time: TimeInterval) {
+        if isPaused?() == true {
+            hoverTimer?.invalidate()
+            hoverTimer = nil
+            return
+        }
         let point = location ?? SyntheticInput.pointer
         let strip = MenuBarScreens.strip(containing: point)
         switch type {
@@ -111,7 +120,7 @@ public final class MenuBarEventMonitor {
 
     private func hoverTimerFired() {
         hoverTimer = nil
-        guard !hoverSuppressed else { return }
+        guard !hoverSuppressed, isPaused?() != true else { return }
         let point = SyntheticInput.pointer
         guard MenuBarScreens.strip(containing: point) != nil, isEmpty(point) else { return }
         onHover?()
@@ -135,7 +144,7 @@ public final class MenuBarEventMonitor {
     }
 
     /// Right edge of the frontmost app's menus (Apple menu through Help), in global coordinates.
-    static func appMenusMaxX() -> CGFloat? {
+    public static func appMenusMaxX() -> CGFloat? {
         guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return nil }
         let app = AXUIElementCreateApplication(pid)
         guard let bar = AX.element(AX.attribute(app, kAXMenuBarAttribute)) else { return nil }

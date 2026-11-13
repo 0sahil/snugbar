@@ -56,8 +56,8 @@ struct DebugRunner {
         init(_ d: String) { description = d }
     }
 
-    private let reader = MenuBarReader()
-    private let orderFile = OrderFileAccess()
+    let reader = MenuBarReader()
+    let orderFile = OrderFileAccess()
 
     init(invocation: DebugInvocation) {
         self.invocation = invocation
@@ -110,8 +110,12 @@ struct DebugRunner {
         case "expanded-row": return await expandedRow()
         case "row-state": return await rowState()
         case "input": return try await input()
+        case "fit-plan": return fitPlan()
+        case "search": return searchItems()
+        case "letters": return letters()
+        case "bar-items": return barItems()
         default:
-            throw Failure("unknown command '\(invocation.command)'; use status, list, hide, click, move, capture, order-file or input")
+            throw Failure("unknown command '\(invocation.command)'; use status, list, hide, click, move, capture, order-file, input, fit-plan, search, letters or bar-items")
         }
     }
 
