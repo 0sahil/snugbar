@@ -14,8 +14,13 @@ enum SyntheticInput {
 
     static func click(at point: CGPoint) {
         let source = CGEventSource(stateID: .hidSystemState)
+        CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)?
+            .post(tap: .cghidEventTap)
+        usleep(30_000)
         CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)?
             .post(tap: .cghidEventTap)
+        let hold = ProcessInfo.processInfo.environment["SNUGBAR_CLICK_HOLD_MS"].flatMap(UInt32.init) ?? 0
+        if hold > 0 { usleep(hold * 1000) }
         CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)?
             .post(tap: .cghidEventTap)
     }

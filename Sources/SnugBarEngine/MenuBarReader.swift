@@ -144,6 +144,37 @@ public final class MenuBarReader {
         return nil
     }
 
+    /// Whether macOS's overflow row is open. Verified on 27.2: MenuBarAgent's "Menu Extras" element (role AXMenuBar)
+    /// holds the « button, whose identifier becomes `menu-bar-overflow-indicator-expanded` exactly while the row is
+    /// open. (The expanded-row windows exist in AX even while the row is closed, so their presence means nothing.)
+    public func isOverflowRowOpen() -> Bool? {
+        guard let pid = agentPID else { return nil }
+        for el in AX.children(AXUIElementCreateApplication(pid)) where AX.role(el) == kAXMenuBarRole {
+            for c in AX.children(el) {
+                let id = AX.firstIdentifier(c)
+                if id == Self.expandedIndicatorID { return true }
+                if id == Self.overflowIndicatorID { return false }
+            }
+        }
+        return nil
+    }
+
+    /// Opens or closes the overflow row and waits (up to `timeout`) until the state is confirmed.
+    @discardableResult
+    public func setOverflowRow(open: Bool, timeout: TimeInterval = 1.5) async -> Bool {
+        if isOverflowRowOpen() == open { return true }
+        guard await clickOverflowButton(open: open) else { return false }
+        let start = Date()
+        while Date().timeIntervalSince(start) < timeout {
+            if isOverflowRowOpen() == open {
+                try? await Task.sleep(nanoseconds: 250_000_000) // let the row's animation settle
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return false
+    }
+
     /// Clicks the « / » button with a synthetic click (AXPress on it is accepted but ignored on macOS 27.2) and puts
     /// the pointer back. `open` true clicks «, false clicks ». Returns false if the button isn't there.
     @discardableResult
@@ -154,6 +185,27 @@ public final class MenuBarReader {
         try? await Task.sleep(nanoseconds: 60_000_000)
         SyntheticInput.restorePointer(before)
         return true
+    }
+
+    /// Debug: MenuBarAgent's AX windows with their attributes and indicator identifiers.
+    public func debugAgentWindows() -> [String] {
+        guard let pid = agentPID else { return [] }
+        var out: [String] = []
+        for (i, w) in AX.children(AXUIElementCreateApplication(pid)).enumerated() {
+            var names: CFArray?
+            AXUIElementCopyAttributeNames(w, &names)
+            let skip: Set<String> = ["AXChildren", "AXParent", "AXTopLevelUIElement", "AXWindow", "AXChildrenInNavigationOrder"]
+            let vals = (names as? [String] ?? []).filter { !skip.contains($0) }.map { n -> String in
+                var v: AnyObject?
+                AXUIElementCopyAttributeValue(w, n as CFString, &v)
+                return "\(n)=\(v.map { String(String(describing: $0).replacingOccurrences(of: "\n", with: " ").prefix(60)) } ?? "nil")"
+            }
+            let kids = AX.children(w)
+            let ids = kids.compactMap { AX.firstIdentifier($0) }.filter { $0.hasPrefix("menu-bar") }
+            let leftOfNotch = kids.compactMap(AX.frame).filter { $0.maxX < 640 }.count
+            out.append("win\(i) kids=\(kids.count) leftOfNotch=\(leftOfNotch) ind=\(ids) " + vals.joined(separator: " | "))
+        }
+        return out
     }
 
     /// Debug: every expanded-row window with its children's owner and frame.

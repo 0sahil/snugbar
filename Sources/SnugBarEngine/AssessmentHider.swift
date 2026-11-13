@@ -29,8 +29,26 @@ public final class AssessmentHider: Hider {
 
     public var isAvailable: Bool { api != nil }
 
-    /// The bundle IDs currently allowed (base plus temporary).
-    public var allowedBundleIDs: Set<String> { baseAllowed.union(temporarilyAllowed) }
+    /// The bundle IDs currently allowed (base plus temporary, or only the focused app while focusing).
+    public var allowedBundleIDs: Set<String> { focusAllowed ?? baseAllowed.union(temporarilyAllowed) }
+
+    /// While set, only these apps (plus Apple's items) are shown, regardless of the base allow-list.
+    private var focusAllowed: Set<String>?
+    public var isFocusing: Bool { focusAllowed != nil }
+
+    /// Shows only `bundleIDs` (plus Apple's items) so an item that would otherwise be hidden or squeezed into macOS's
+    /// overflow row lands in the visible bar right of the notch. Works whether or not a hide is active.
+    public func focus(on bundleIDs: Set<String>) throws {
+        focusAllowed = bundleIDs
+        try activate()
+    }
+
+    /// Ends `focus(on:)`, restoring the regular hide (or showing everything if none is active).
+    public func endFocus() {
+        guard focusAllowed != nil else { return }
+        focusAllowed = nil
+        if isHiding, !isSuspended { try? activate() } else { invalidate() }
+    }
 
     public init() {
         switch API.load() {

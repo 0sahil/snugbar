@@ -113,8 +113,14 @@ public final class NotificationCenterGuard {
             log("no panel after \(Int(pressDelay * 1000)) ms; clock element not found")
             return
         }
-        let result = AX.perform(entry.element, kAXPressAction)
-        log("no panel after \(Int(pressDelay * 1000)) ms; AXPress clock -> \(result.rawValue)")
+        // AXPress on the clock is rejected on macOS 27.2 (-25206), so replay the click. The user's pointer is already
+        // on the clock (that is how we got here); the guard's own monitor ignores it because `handling` is set.
+        let frame = entry.item.frame.cgRect
+        let before = SyntheticInput.pointer
+        let target = MenuBarGeometry.hit(before, in: frame) ? before : CGPoint(x: frame.midX, y: frame.midY)
+        SyntheticInput.click(at: target)
+        if target != before { SyntheticInput.restorePointer(before) }
+        log("no panel after \(Int(pressDelay * 1000)) ms; replayed the click on the clock")
     }
 
     private func log(_ message: String) {

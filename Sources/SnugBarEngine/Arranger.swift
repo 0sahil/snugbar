@@ -58,6 +58,9 @@ public final class Arranger {
     /// Time for the menu bar to settle after a move before it is re-read.
     public var settleDelay: TimeInterval = 1.5
 
+    /// Skip the order-file write and use the ⌘-drag fallback (testing, or when the user prefers it).
+    public var forceDrag = false
+
     public init(reader: MenuBarReader, access: OrderFileAccess) {
         self.reader = reader
         self.access = access
@@ -70,7 +73,9 @@ public final class Arranger {
         let orderBefore = reader.snapshot(orderPositions: positions).items.map(\.id.rawValue)
 
         var fallbackReason: String?
-        if let positions {
+        if forceDrag {
+            fallbackReason = "drag forced"
+        } else if let positions {
             if item.id.isOrderFileKey, placement.anchor.id.isOrderFileKey {
                 let corePlacement: OrderPlanner.Placement = {
                     switch placement {

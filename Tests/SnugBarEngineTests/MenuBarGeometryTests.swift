@@ -65,6 +65,16 @@ final class MenuBarGeometryTests: XCTestCase {
 }
 
 final class NotificationCenterDetectorTests: XCTestCase {
+    func testIgnoresDesktopWidgets() {
+        // Desktop widgets (Forecast, Up Next) are Notification Center windows on a negative desktop layer.
+        let widget: [String: Any] = [
+            kCGWindowOwnerName as String: "Notification Centre",
+            kCGWindowLayer as String: -2147483601,
+            kCGWindowBounds as String: ["X": 258, "Y": 41, "Width": 180, "Height": 180],
+        ]
+        XCTAssertFalse(NotificationCenterDetector.isPanelOpen(windowList: [widget]))
+    }
+
     private func window(_ owner: String, width: Double) -> [String: Any] {
         [
             kCGWindowOwnerName as String: owner,

@@ -52,19 +52,30 @@ public final class ItemActivator {
         var entry = reader.snapshot(orderPositions: orderPositions).entry(for: item.id)
         var allowed = false
 
-        // 1. Temporarily allow a hidden app.
-        if let hider, hider.isHiding, !item.ownerBundleID.isEmpty, !hider.allowedBundleIDs.contains(item.ownerBundleID),
-           !item.isAppleItem {
-            hider.allowTemporarily(item.ownerBundleID)
+        // 1. Hidden or squeezed into macOS's overflow row: focus. Show only the item's app (plus Apple's items and
+        // SnugBar) so it lands in the visible bar right of the notch, click it there, and restore the layout after the
+        // menu closes. macOS's own overflow row is not used: how many items it can show depends on the frontmost
+        // app's menus (verified on 27.2: with Chrome in front the row had no room at all).
+        let isHiddenByUs = hider.map { $0.isHiding && !$0.allowedBundleIDs.contains(item.ownerBundleID) } ?? false
+        let currentlyOverflowed = entry?.item.isOverflowed ?? item.isOverflowed
+        if let hider, hider.isAvailable, !item.ownerBundleID.isEmpty, !item.isAppleItem,
+           isHiddenByUs || currentlyOverflowed || entry == nil {
+            var focus: Set<String> = [item.ownerBundleID]
+            if let own = Bundle.main.bundleIdentifier { focus.insert(own) }
+            try hider.focus(on: focus)
             allowed = true
             entry = await waitForEntry(item, orderPositions: orderPositions)
             guard entry != nil else {
-                hider.endTemporaryAllowance(item.ownerBundleID)
+                hider.endFocus()
                 throw ActivationError.itemDidNotAppear(item.id)
             }
+            try? await Task.sleep(nanoseconds: 150_000_000) // let the bar settle after reflowing
+            entry = reader.snapshot(orderPositions: orderPositions).entries.first {
+                $0.item.ownerBundleID == item.ownerBundleID && $0.indexInApp == (entry?.indexInApp ?? 0) && !$0.item.isOverflowed
+            } ?? entry
         }
         guard let entry else { throw ActivationError.itemDidNotAppear(item.id) }
-        defer { if allowed { scheduleRehide(bundleID: item.ownerBundleID, frame: entry.item.frame.cgRect) } }
+        defer { if allowed { scheduleEndFocus(frame: entry.item.frame.cgRect) } }
 
         // 2. The app's own extras menu bar. Verified on macOS 27.2: AXPress here returns success and highlights the
         // item but does NOT open the menu for third-party apps (Tailscale, Slack, Wickbar), so it is opt-in only.
@@ -92,11 +103,11 @@ public final class ItemActivator {
         var detail = "synthetic click"
         if entry.item.isOverflowed {
             let overflowed = reader.snapshot(orderPositions: orderPositions).entries.filter { $0.item.isOverflowed }
-            await reader.clickOverflowButton(open: true)
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            guard let frame = reader.expandedRowFrame(for: entry, overflowed: overflowed) else {
-                // Clicking the stacked frame would hit « and close the row again, so stop here.
-                await reader.clickOverflowButton(open: false)
+            // Never click a row frame unless the row is confirmed open: otherwise the click lands on whatever is
+            // underneath (another app's menus).
+            guard await reader.setOverflowRow(open: true),
+                  let frame = reader.expandedRowFrame(for: entry, overflowed: overflowed) else {
+                await reader.setOverflowRow(open: false)
                 throw ActivationError.itemDidNotAppear(item.id)
             }
             target = frame
@@ -140,6 +151,28 @@ public final class ItemActivator {
             candidates: children.map(AX.frame)
         ) else { return nil }
         return children[index]
+    }
+
+    /// Ends a focus after the next click outside the item (its menu has closed or the user moved on).
+    private func scheduleEndFocus(frame: CGRect) {
+        guard let hider else { return }
+        if let old = rehideMonitors.removeValue(forKey: "focus") { NSEvent.removeMonitor(old) }
+        let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
+            let location = event.type == .keyDown ? nil : event.cgEvent?.location
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if let location, MenuBarGeometry.hit(location, in: frame) { return }
+                // Escape or Return closes the menu too; other keys navigate it.
+                if event.type == .keyDown, ![53, 36, 76].contains(Int(event.keyCode)) { return }
+                if let m = self.rehideMonitors.removeValue(forKey: "focus") { NSEvent.removeMonitor(m) }
+                let delay = self.rehideDelay
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    hider.endFocus()
+                }
+            }
+        }
+        if let monitor { rehideMonitors["focus"] = monitor } else { hider.endFocus() }
     }
 
     private func scheduleRehide(bundleID: String, frame: CGRect) {

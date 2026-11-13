@@ -108,6 +108,7 @@ struct DebugRunner {
         case "order-file": return try dumpOrderFile()
         case "close-overflow": return await closeOverflow()
         case "expanded-row": return await expandedRow()
+        case "row-state": return await rowState()
         default:
             throw Failure("unknown command '\(invocation.command)'; use status, list, hide, click, move, capture or order-file")
         }
@@ -298,7 +299,7 @@ struct DebugRunner {
         guard let query = invocation.positional().first else { throw Failure("usage: click <item>") }
         let (snap, positions) = try snapshot()
         let item = try findItem(query, in: snap)
-        let activator = ItemActivator(reader: reader, hider: nil)
+        let activator = ItemActivator(reader: reader, hider: AssessmentHider())
         let result = try await activator.activate(item, orderPositions: positions)
         // Stay alive briefly: when this short-lived process quits, focus changes can dismiss the menu it opened.
         let linger = Double(invocation.value(after: "--linger") ?? "3") ?? 3
@@ -337,6 +338,7 @@ struct DebugRunner {
         case let .before(a), let .after(a): anchor = a
         }
         let arranger = Arranger(reader: reader, access: orderFile)
+        arranger.forceDrag = invocation.arguments.contains("--drag")
         let result = try await arranger.move(item, placement)
         return MoveResult(item: item.id, anchor: anchor.id, placement: placementName, arrangement: result)
     }
@@ -411,11 +413,27 @@ struct DebugRunner {
         return ExpandedRowResult(opened: opened, windows: windows, closed: closed)
     }
 
+    struct RowStateResult: Encodable { var closed: [String]; var open: [String]; var closedAgain: [String]; var states: [String] }
+
+    /// Debug: on-screen windows near the menu bar, with the row closed, open, and closed again.
+    private func rowState() async -> RowStateResult {
+        func windows() -> [String] { reader.debugAgentWindows() }
+        var states = ["start: \(String(describing: reader.isOverflowRowOpen()))"]
+        let closed = windows()
+        states.append("open ok: \(await reader.setOverflowRow(open: true)) -> \(String(describing: reader.isOverflowRowOpen()))")
+        try? await Task.sleep(nanoseconds: 900_000_000)
+        let open = windows()
+        let shot = Process(); shot.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        shot.arguments = ["-x", "-R", "0,0,1470,34", "/tmp/rowstate-open.png"]; try? shot.run(); shot.waitUntilExit()
+        states.append("close ok: \(await reader.setOverflowRow(open: false)) -> \(String(describing: reader.isOverflowRowOpen()))")
+        return RowStateResult(closed: closed, open: open, closedAgain: windows(), states: states)
+    }
+
     struct CloseOverflowResult: Encodable { var clicked: Bool }
 
     /// Clicks MenuBarAgent's » to close the overflow row (pointer put back).
     private func closeOverflow() async -> CloseOverflowResult {
-        CloseOverflowResult(clicked: await reader.clickOverflowButton(open: false))
+        CloseOverflowResult(clicked: await reader.setOverflowRow(open: false))
     }
 
     private func dumpOrderFile() throws -> OrderFileResult {

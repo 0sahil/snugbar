@@ -65,6 +65,10 @@ public enum NotificationCenterDetector {
             guard let owner = window[kCGWindowOwnerName as String] as? String, owner.hasPrefix(ownerPrefix) else {
                 return false
             }
+            // Desktop widgets are Notification Center windows too, on a negative desktop layer; the panel itself sits
+            // on a positive layer (23 on macOS 27.2).
+            let layer = (window[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0
+            guard layer > 0 else { return false }
             let bounds = window[kCGWindowBounds as String] as? [String: Any]
             let width = (bounds?["Width"] as? NSNumber)?.doubleValue ?? 0
             return width > minimumPanelWidth
