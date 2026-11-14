@@ -185,12 +185,29 @@ shown anywhere). The first time another app opens a link that changes something,
 app and remembers the answer; when it can't tell which app sent the link, it asks every time. Settings > Control >
 Links > Reset forgets the answers.
 
-## Permissions
+## First run and permissions
 
-- Accessibility (required): reading the menu bar and opening items.
-- Screen Recording (optional): images of menu bar items.
-- Menu bar layout access (optional): chosen once in an open panel, lets SnugBar reorder items without moving the
-  pointer.
+The first time SnugBar starts, a short setup window explains each permission, shows whether it is allowed, and has a
+button that opens the right place in System Settings. Each page can be skipped; the setup can be opened again from
+SnugBar's menu (Set Up SnugBar…) or from Settings > Permissions (Show Setup Again…). The status updates by itself while
+the window is open, and a newly allowed permission takes effect without restarting SnugBar (Screen Recording is the
+exception: macOS often applies it only after a restart, so SnugBar offers a Restart button).
+
+| Permission | Used for | Without it |
+|---|---|---|
+| Accessibility (required) | Reading the menu bar and opening items | Reduced mode: only basic hide and show (the icon, shortcuts, and `expand`, `collapse`, `toggle`, `swap`, `zen`, `move`) |
+| Screen Recording (optional) | Pictures of items in the SnugBar Bar and the layout editor | App icons instead; everything else works |
+| Menu Bar folder (optional) | Reordering items without moving the pointer (chosen once in an open panel) | Reordering moves the pointer briefly |
+
+In reduced mode SnugBar's icon shows a warning and its menu starts with "Accessibility Needed…". The SnugBar Bar,
+search, open by letter, the layout editor, showing items by clicking, hovering or scrolling on the menu bar, and opening
+Notification Center from the clock while items are hidden are unavailable; hidden items are shown in the menu bar
+instead. `click` and `order` answer with an `unavailable` error, `list` and `search` list the apps SnugBar already knows
+(from its settings and running apps) without live positions, and `status` adds `reducedMode` and an `unavailable` list.
+SnugBar checks Accessibility every few seconds, so allowing or removing it while SnugBar runs takes effect on its own.
+
+SnugBar collects no usage data and doesn't send anything over the network. Its control server listens on 127.0.0.1
+only, and its settings are one JSON file in `~/Library/Application Support/SnugBar`.
 
 ## Debug commands
 
@@ -210,7 +227,7 @@ Read-only commands for the SnugBar Bar and search: `fit-plan` (menu bar room, sh
 `bar-items [--all]` (what the SnugBar Bar lists, per tile, with each item's image source). `--all` includes Always
 Hidden items. An app whose items have no captured image yet gets one tile in the bar; it opens the app's leftmost item.
 
-`serve --fake --port <N> [--seconds <S>] [--token-file <path>]` runs the real HTTP/MCP server on 127.0.0.1:N for S
+`serve --fake --port <N> [--seconds <S>] [--token-file <path>] [--grants <list|none>]` runs the real HTTP/MCP server on 127.0.0.1:N for S
 seconds (default 30) with made-up items and an in-memory state: nothing on screen changes, so it can run next to the
 installed SnugBar. With `--token-file`, requests need the token in that file. The output lists the requests and what
 the fake engine was asked to do.
@@ -221,6 +238,14 @@ SnugBar Bar the same way (`--dragging`: mid-drag; `--width`: narrow enough to wr
 `reconcile --dry-run [--settings <path>] [--trigger <name>] [--explicit] --out <file>` reports what a layout check
 would write (order-file values, spacer positions, ⌘-drag moves for `--explicit`) or why it would skip, without
 writing anything; `backups [--dir <dir>] --out <file>` lists layout backups.
+
+Read-only setup commands, with made-up permissions given as `--grants none` or a comma list of `accessibility`,
+`screenRecording` and `orderFile`: `setup-snapshot --step <welcome|accessibility|screenRecording|menuBarFolder|done>
+--grants <...> --out <png>` renders a setup page; `settings-snapshot --pane permissions --grants <...> --out <png>`
+renders the Permissions pane (`--size WxH` for a taller window, `--hover` to show the hover delay slider in General);
+`menu-snapshot --grants <...> --out <txt>` writes SnugBar's menu as text; `availability --grants <...> --out <json>`
+lists what works. `permissions --out <json>` reports the permissions of the copy that runs it. None of them asks for a
+permission.
 
 Captured item images are cached as raw crops in `~/Library/Caches/<bundle id>/ItemImages`; the menu bar background is
 keyed out when they are loaded, so they are drawn as template images in the label colour.

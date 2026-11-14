@@ -30,6 +30,7 @@ final class LayoutEditorModel: ObservableObject {
         var removeSpacers: ([String]) -> Void = { _ in }
         var setSpacerWidth: (String, Double) -> Void = { _, _ in }
         var grantAccess: () -> Void = {}
+        var grantScreenRecording: () -> Void = {}
         var setDragging: (Bool) -> Void = { _ in }
     }
 
@@ -39,6 +40,8 @@ final class LayoutEditorModel: ObservableObject {
     @Published var selection = LayoutSelection()
     @Published var drag: DragState?
     @Published private(set) var orderAccess = true
+    /// Pictures of items are shown (Screen Recording); otherwise app icons.
+    @Published private(set) var pictures = true
     /// A one-line status under the editor.
     @Published var message: String?
 
@@ -49,13 +52,14 @@ final class LayoutEditorModel: ObservableObject {
     let hoverLabel = HoverLabel()
     private var hoveredKey: String?
 
-    func update(rows: [SnugBarCore.Section: [LayoutTile]], images: [String: NSImage], orderAccess: Bool) {
+    func update(rows: [SnugBarCore.Section: [LayoutTile]], images: [String: NSImage], orderAccess: Bool, pictures: Bool = true) {
         var result: [SnugBarCore.Section: [Tile]] = [:]
         for section in Self.sections {
             result[section] = (rows[section] ?? []).map { Tile(tile: $0, image: images[$0.key]) }
         }
         self.rows = result
         self.orderAccess = orderAccess
+        self.pictures = pictures
         selection.retain(selectableRows)
     }
 
@@ -224,8 +228,15 @@ struct LayoutEditorView: View {
             Text("Select several items with ⌘-click or ⇧-click to move them together.")
             if !model.orderAccess {
                 HStack(spacing: 8) {
-                    Text("Without Menu Bar folder access, reordering Shown moves the pointer briefly and Hidden and Always Hidden can’t be reordered.")
-                    Button("Grant Access…") { model.actions.grantAccess() }
+                    Text(PermissionText.layoutEditorNoFolder)
+                    Button(PermissionKind.menuBarFolder.buttonTitle) { model.actions.grantAccess() }
+                        .controlSize(.small)
+                }
+            }
+            if !model.pictures {
+                HStack(spacing: 8) {
+                    Text(PermissionText.noScreenRecordingPictures)
+                    Button(PermissionKind.screenRecording.buttonTitle) { model.actions.grantScreenRecording() }
                         .controlSize(.small)
                 }
             }
@@ -521,6 +532,7 @@ final class LayoutEditorController: NSObject, NSWindowDelegate {
                 c.grantOrderFileAccess()
                 self?.reload()
             },
+            grantScreenRecording: { c.grantScreenRecording() },
             setDragging: { c.keeper.editorDragging = $0 }
         )
     }
@@ -556,7 +568,7 @@ final class LayoutEditorController: NSObject, NSWindowDelegate {
 
     private func reload() {
         let content = controller.layoutEditorContent()
-        model.update(rows: content.rows, images: content.images, orderAccess: content.orderAccess)
+        model.update(rows: content.rows, images: content.images, orderAccess: content.orderAccess, pictures: content.pictures)
     }
 
     private func startPolling() {

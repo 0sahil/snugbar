@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SnugBarCore
 import SnugBarEngine
 import SwiftUI
@@ -141,7 +142,9 @@ private struct GeneralSettings: View {
                 if controller.settings.autoCollapse.enabled {
                     LabeledContent("Delay") {
                         HStack {
-                            Slider(value: setting(controller, \.autoCollapse.delay), in: AutoCollapseSettings.delayRange, step: 1)
+                            // Continuous, rounded in the binding: a stepped slider draws its ticks as a line.
+                            Slider(value: rounded(\.autoCollapse.delay, step: 1, in: AutoCollapseSettings.delayRange),
+                                   in: AutoCollapseSettings.delayRange)
                             Text("\(Int(controller.settings.autoCollapse.delay)) s").monospacedDigit().frame(width: 44, alignment: .trailing)
                         }
                     }
@@ -157,7 +160,8 @@ private struct GeneralSettings: View {
                 if controller.settings.reveal.hover {
                     LabeledContent("Wait") {
                         HStack {
-                            Slider(value: setting(controller, \.reveal.hoverDelay), in: RevealSettings.hoverDelayRange, step: 0.1)
+                            Slider(value: rounded(\.reveal.hoverDelay, step: 0.1, in: RevealSettings.hoverDelayRange),
+                                   in: RevealSettings.hoverDelayRange)
                             Text(String(format: "%.1f s", controller.settings.reveal.hoverDelay)).monospacedDigit()
                                 .frame(width: 44, alignment: .trailing)
                         }
@@ -201,6 +205,16 @@ private struct GeneralSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func rounded(_ path: WritableKeyPath<SnugBarCore.Settings, Double>, step: Double, in range: ClosedRange<Double>) -> Binding<Double> {
+        Binding(
+            get: { controller.settings[keyPath: path] },
+            set: { value in
+                let next = SliderStep.rounded(value, step: step, in: range)
+                if next != controller.settings[keyPath: path] { controller.update { $0[keyPath: path] = next } }
+            }
+        )
     }
 
     private func exportSettings() {
@@ -566,43 +580,80 @@ struct ShortcutRecorder: View {
 
 // MARK: - Permissions
 
+/// The three permissions with their live status (checked every second while the pane is shown), what works
+/// without each, and a button to the right System Settings pane or the folder picker; then a short Privacy section.
 private struct PermissionSettings: View {
     @ObservedObject var controller: AppController
+    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
+        let grants = controller.availability.grants
         Form {
             Section {
-                permission(
-                    "Accessibility", granted: controller.accessibilityGranted, required: true,
-                    why: "Reads the menu bar and opens items. Without it SnugBar can only hide and show.",
-                    action: controller.grantAccessibility
-                )
-                permission(
-                    "Screen Recording", granted: controller.screenRecordingGranted, required: false,
-                    why: "Shows pictures of items. Without it SnugBar shows app icons instead.",
-                    action: controller.grantScreenRecording
-                )
-                permission(
-                    "Menu bar layout", granted: controller.orderFileGranted, required: false,
-                    why: "Lets SnugBar reorder items without moving the pointer. Pick the folder SnugBar suggests.",
-                    action: controller.grantOrderFileAccess
-                )
+                ForEach(PermissionKind.allCases, id: \.self) { permission in
+                    row(permission, granted: grants.has(permission))
+                }
+            } footer: {
+                if controller.availability.isReduced {
+                    Text(PermissionText.reducedMode).font(.callout).foregroundStyle(.secondary)
+                }
+            }
+            Section {
+                HStack {
+                    Text("The setup window explains each permission step by step.")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(PermissionText.showSetupAgain) { controller.openSetup?(nil) }
+                }
+            }
+            Section("Privacy") {
+                Text(PermissionText.privacyTelemetry)
+                Text(PermissionText.privacyServer)
+                HStack {
+                    Text(PermissionText.privacySettings)
+                    Spacer()
+                    Button("Show in Finder") { controller.revealSettingsFile() }
+                }
             }
         }
         .formStyle(.grouped)
         .onAppear(perform: controller.refreshPermissions)
+        .onReceive(timer) { _ in controller.refreshPermissions() }
     }
 
-    private func permission(_ name: String, granted: Bool, required: Bool, why: String, action: @escaping () -> Void) -> some View {
-        HStack(alignment: .top) {
-            Image(systemName: granted ? "checkmark.circle.fill" : (required ? "exclamationmark.circle.fill" : "circle"))
-                .foregroundStyle(granted ? .green : (required ? .orange : .secondary))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(name + (required ? "" : " (optional)"))
-                Text(why).font(.callout).foregroundStyle(.secondary)
+    private func row(_ permission: PermissionKind, granted: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(permission.title + (permission.isRequired ? "" : " (optional)"))
+                Spacer()
+                PermissionStatusLabel(permission: permission, granted: granted)
+                    .foregroundStyle(.secondary)
             }
-            Spacer()
-            if !granted { Button("Grant…", action: action) }
+            Text(permission.purpose + " " + permission.withoutIt)
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if !granted || permission == .menuBarFolder {
+                HStack {
+                    Spacer()
+                    Button(granted ? "Choose Again…" : permission.buttonTitle) { action(permission) }
+                }
+            }
+            if permission == .screenRecording, controller.screenRecordingRestartHint.shows(granted: granted) {
+                HStack {
+                    Text(PermissionText.restartForScreenRecording).font(.callout)
+                    Spacer()
+                    Button(PermissionText.restartButton) { AppRelauncher.relaunch() }
+                }
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func action(_ permission: PermissionKind) {
+        switch permission {
+        case .accessibility: controller.grantAccessibility()
+        case .screenRecording: controller.grantScreenRecording()
+        case .menuBarFolder: controller.grantOrderFileAccess()
         }
     }
 }

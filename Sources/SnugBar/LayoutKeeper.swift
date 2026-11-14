@@ -205,7 +205,8 @@ final class LayoutKeeper {
                 try? await Task.sleep(nanoseconds: 800_000_000)
             }
             // Nothing to keep until the user arranges items: don't even read the menu bar.
-            if self.controller.settings.layout.enforcesAnyOrder {
+            // Without Accessibility the menu bar can't be read, so the order isn't checked (reduced mode).
+            if self.controller.settings.layout.enforcesAnyOrder, self.controller.checkAvailable(.keepOrder) {
                 let evaluation = self.evaluate(explicit: false)
                 await self.execute(evaluation, explicit: false)
             }

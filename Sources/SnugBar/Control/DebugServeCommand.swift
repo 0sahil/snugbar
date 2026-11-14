@@ -1,10 +1,11 @@
 import Foundation
 import SnugBarCore
 
-/// `serve --fake --port <N> [--seconds <S>] [--token-file <path>]`: runs the real HTTP/MCP server on 127.0.0.1:N
+/// `serve --fake --port <N> [--seconds <S>] [--token-file <path>] [--grants <list|none>]`: runs the real HTTP/MCP server on 127.0.0.1:N
 /// for S seconds (default 30) with an in-memory engine (made-up items, no Accessibility, no hiding, no menu bar
 /// changes), then writes a log of the requests and of what the fake engine was asked to do. With `--token-file`,
-/// every request needs the token in that file (created when missing).
+/// every request needs the token in that file (created when missing). `--grants` sets the permissions the fake engine
+/// reports (default: Accessibility and the Menu Bar folder), to try the reduced mode.
 extension DebugRunner {
     struct ServeResult: Encodable {
         var port: Int
@@ -34,6 +35,10 @@ extension DebugRunner {
         }
 
         let engine = InMemoryControlEngine.demo(version: AppInfo.version, port: port, tokenRequired: token != nil)
+        if let grants = try grants(required: false) {
+            engine.status.permissions = ControlPermissions(accessibility: grants.accessibility, screenRecording: grants.screenRecording,
+                                                           menuBarFolder: grants.orderFile)
+        }
         let handler = ControlHTTPHandler(router: CommandRouter(engine: engine), serverVersion: AppInfo.version) {
             .init(port: port, requiredToken: token)
         }

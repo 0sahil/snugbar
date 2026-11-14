@@ -380,6 +380,14 @@ public enum CLIFormatter {
             ["Server:", r.port.map { "127.0.0.1:\($0)" } ?? "unknown"],
             ["Token:", r.token == true ? "required" : "not required"],
         ]
-        return columns(rows, header: nil).joined(separator: "\n")
+        var lines = columns(rows, header: nil)
+        if r.reducedMode == true {
+            lines.append("Reduced mode: Accessibility is not granted, so only basic hide and show work.")
+        }
+        if let unavailable = r.unavailable, !unavailable.isEmpty {
+            let titles = unavailable.map { AppFeature(rawValue: $0)?.title ?? $0 }
+            lines.append("Unavailable: " + titles.joined(separator: "; "))
+        }
+        return lines.joined(separator: "\n")
     }
 }

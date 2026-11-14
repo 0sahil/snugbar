@@ -121,6 +121,9 @@ public final class CommandRouter {
             r.permissions = info.permissions
             r.port = info.port
             r.token = info.tokenRequired
+            let availability = Self.availability(info.permissions)
+            r.reducedMode = availability.isReduced
+            r.unavailable = availability.unavailable.map(\.rawValue)
             fillState(&r)
 
         case .show:
@@ -148,6 +151,7 @@ public final class CommandRouter {
             r.id = item.id.rawValue
 
         case .click:
+            try requireAccessibility("Opening an item")
             let item = try resolve(args.item, role: "item").item
             try requireNoZen()
             r.id = item.id.rawValue
@@ -186,6 +190,7 @@ public final class CommandRouter {
             r.section = target
 
         case .order:
+            try requireAccessibility("Reordering items")
             let item = try resolve(args.item, role: "item").item
             let before = nonEmpty(args.before), after = nonEmpty(args.after)
             guard (before == nil) != (after == nil) else { throw invalid("order needs exactly one of before or after") }
@@ -302,6 +307,17 @@ public final class CommandRouter {
         if engine.barState.zen {
             throw ControlError(.locked, "Zen mode is on and locks every way of showing items; turn it off first (snugbar zen off)")
         }
+    }
+
+    /// Opening and reordering items read the menu bar, which needs Accessibility (reduced mode, feature 87).
+    private func requireAccessibility(_ what: String) throws {
+        guard engine.statusInfo().permissions.accessibility else {
+            throw ControlError(.unavailable, PermissionText.needsAccessibility(what))
+        }
+    }
+
+    static func availability(_ p: ControlPermissions) -> FeatureAvailability {
+        FeatureAvailability(accessibility: p.accessibility, screenRecording: p.screenRecording, orderFile: p.menuBarFolder)
     }
 
     private func requireThirdParty(_ item: MenuBarItem, _ why: String) throws {

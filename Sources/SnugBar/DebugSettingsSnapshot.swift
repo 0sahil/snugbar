@@ -1,9 +1,10 @@
 import AppKit
 import SnugBarCore
 
-/// `settings-snapshot --pane <name> --out <png> [--server-off] [--appearance light|dark]`: renders the Settings
-/// window (the same window setup as the app's) offscreen with default settings at 760×520 and writes a PNG; the JSON
-/// goes beside it. Nothing is started: no status item, no hiding, no server, no hotkeys, and neither the settings
+/// `settings-snapshot --pane <name> --out <png> [--server-off] [--grants <list|none>] [--hover] [--size WxH]
+/// [--appearance light|dark]`: renders the Settings window (the same window setup as the app's) offscreen with default
+/// settings at 760×520 (or `--size`) and writes a PNG; the JSON goes beside it. `--grants` fakes the permissions
+/// (default: all granted); `--hover` turns on "Resting the pointer on the menu bar" so its slider shows. Nothing is started: no status item, no hiding, no server, no hotkeys, and neither the settings
 /// file, the token file, the order file nor the remembered pane is read or written.
 extension DebugRunner {
     struct SettingsSnapshotResult: Encodable {
@@ -29,16 +30,25 @@ extension DebugRunner {
         var sidebarSelectedRow: Int
         var toolbarItems: [String]
         var serverState: String
+        var grants: String
     }
 
     func settingsSnapshot() async throws -> SettingsSnapshotResult {
-        let usage = "usage: settings-snapshot --pane <\(SettingsPane.allCases.map(\.rawValue).joined(separator: "|"))> --out <png> [--server-off] [--appearance light|dark]"
+        let usage = "usage: settings-snapshot --pane <\(SettingsPane.allCases.map(\.rawValue).joined(separator: "|"))> --out <png> [--server-off] [--grants <list|none>] [--hover] [--size WxH] [--appearance light|dark]"
         guard let name = invocation.value(after: "--pane"), let pane = SettingsPane(name: name) else { throw Failure(usage) }
         guard let out = invocation.outputURL else { throw Failure(usage) }
 
         var settings = SnugBarCore.Settings.default
         settings.controlServer.enabled = !invocation.arguments.contains("--server-off")
-        let controller = AppController(preview: settings)
+        if invocation.arguments.contains("--hover") { settings.reveal.hover = true }
+        let grants = try grants(required: false) ?? .all
+        let controller = AppController(preview: settings, grants: grants)
+        var size = SettingsWindow.defaultContentSize
+        if let text = invocation.value(after: "--size") {
+            let parts = text.split(separator: "x").compactMap { Double($0) }
+            guard parts.count == 2 else { throw Failure(usage) }
+            size = NSSize(width: parts[0], height: parts[1])
+        }
         let serverState: ControlServer.State = settings.controlServer.enabled ? .listening(port: settings.controlServer.effectivePort) : .off
         let control = ControlSurface(controller: controller, previewServerState: serverState)
         let navigation = SettingsNavigation(defaults: nil, pane: pane)
@@ -53,6 +63,7 @@ extension DebugRunner {
         default: break
         }
         SettingsWindow.configure(window, controller: controller, control: control, navigation: navigation)
+        window.setContentSize(size)
         // Far outside every screen, so nothing appears; ordered in so SwiftUI lays out the toolbar and split view.
         window.setFrameOrigin(NSPoint(x: -30000, y: -30000))
         window.orderFront(nil)
@@ -119,7 +130,8 @@ extension DebugRunner {
                 sidebarRows: sidebarList?.numberOfRows ?? 0,
                 sidebarSelectedRow: sidebarList?.selectedRow ?? -1,
                 toolbarItems: window.toolbar?.items.map(\.itemIdentifier.rawValue) ?? [],
-                serverState: "\(serverState)"
+                serverState: "\(serverState)",
+                grants: grants.listDescription
             )
         }
     }

@@ -61,7 +61,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "SnugBar")
         image?.isTemplate = true
         item?.button?.image = image
-        if state.zen {
+        if !controller.accessibilityGranted {
+            item?.button?.toolTip = "SnugBar needs Accessibility permission. Right-click for the menu."
+        } else if state.zen {
             item?.button?.toolTip = "SnugBar: Zen mode is on. Click for the menu."
         } else {
             item?.button?.toolTip = state.reveal == .collapsed ? "SnugBar: click to show hidden items" : "SnugBar: click to hide items"
@@ -90,27 +92,44 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     private func buildMenu() -> NSMenu {
-        let menu = NSMenu()
-        let c = controller
-        let state = c.state
+        StatusMenu.build(controller: controller, openSettings: openSettings)
+    }
+}
 
-        let show = entry(state.reveal == .collapsed ? "Show Hidden Items" : "Hide Items", key: hotkeyHint(.toggleHidden)) { c.toggle() }
+/// SnugBar's menu (right-click on the icon). Built fresh each time it opens, from the controller's state; also built
+/// on its own for `--debug menu-snapshot`.
+@MainActor
+enum StatusMenu {
+    static func build(controller c: AppController, openSettings: @escaping () -> Void) -> NSMenu {
+        let menu = NSMenu()
+        // Enabled states are set here (Zen, permissions); automatic validation would enable every closure item.
+        menu.autoenablesItems = false
+        let state = c.state
+        let availability = c.availability
+
+        // Reduced mode (feature 87): the way to full mode comes first.
+        if !availability.grants.accessibility {
+            menu.addItem(entry(PermissionText.accessibilityNeededMenuTitle) { c.openSetup?(.accessibility) })
+            menu.addItem(.separator())
+        }
+
+        let show = entry(state.reveal == .collapsed ? "Show Hidden Items" : "Hide Items", key: hotkeyHint(c, .toggleHidden)) { c.toggle() }
         show.isEnabled = !state.zen
         menu.addItem(show)
-        let always = entry(state.reveal == .all ? "Hide Always Hidden Items" : "Show Always Hidden Items", key: hotkeyHint(.toggleAlwaysHidden)) {
+        let always = entry(state.reveal == .all ? "Hide Always Hidden Items" : "Show Always Hidden Items", key: hotkeyHint(c, .toggleAlwaysHidden)) {
             c.toggleAlwaysHidden()
         }
         always.isEnabled = !state.zen
         menu.addItem(always)
-        let swap = entry("Swap Shown and Hidden", key: hotkeyHint(.swap)) { c.swap() }
+        let swap = entry("Swap Shown and Hidden", key: hotkeyHint(c, .swap)) { c.swap() }
         swap.state = state.swapped ? .on : .off
         swap.isEnabled = c.supportsSwap && !state.zen
         menu.addItem(swap)
         // After the menu has closed, so the palette can take keyboard focus.
-        let search = entry("Search…", key: hotkeyHint(.search)) { DispatchQueue.main.async { c.showSearch() } }
-        search.isEnabled = !state.zen
+        let search = entry("Search…", key: hotkeyHint(c, .search)) { DispatchQueue.main.async { c.showSearch() } }
+        needs(search, .search, availability, enabled: !state.zen)
         menu.addItem(search)
-        let zen = entry("Zen Mode", key: hotkeyHint(.zen)) { c.toggleZen() }
+        let zen = entry("Zen Mode", key: hotkeyHint(c, .zen)) { c.toggleZen() }
         zen.state = state.zen ? .on : .off
         menu.addItem(zen)
 
@@ -125,9 +144,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
         menu.addItem(info(c.backendDescription))
-        if !c.accessibilityGranted {
-            menu.addItem(entry("Grant Accessibility…") { c.grantAccessibility() })
-        }
         if !c.isRunningFromApplications {
             menu.addItem(info("Move SnugBar to Applications: its icon is hidden with other apps when it runs from elsewhere."))
         }
@@ -136,8 +152,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
-        menu.addItem(entry("Edit Layout…") { c.openLayoutEditor?() })
-        menu.addItem(entry("Settings…", keyEquivalent: ",") { [openSettings] in openSettings() })
+        let layout = entry("Edit Layout…") { c.openLayoutEditor?() }
+        needs(layout, .layoutEditor, availability)
+        menu.addItem(layout)
+        menu.addItem(entry(PermissionText.setUpMenuTitle) { c.openSetup?(nil) })
+        menu.addItem(entry("Settings…", keyEquivalent: ",") { openSettings() })
         let login = entry("Launch at Login") { c.setLaunchAtLogin(!c.loginItemEnabled) }
         login.state = c.loginItemEnabled ? .on : .off
         menu.addItem(login)
@@ -146,12 +165,22 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         return menu
     }
 
-    private func hotkeyHint(_ action: HotkeyAction) -> Hotkey? {
-        controller.settings.hotkeys[action]
+    /// A feature the current permissions don't allow is disabled, with the reason as the item's second line.
+    private static func needs(_ item: NSMenuItem, _ feature: AppFeature, _ availability: FeatureAvailability, enabled: Bool = true) {
+        if let reason = availability.reason(feature) {
+            item.isEnabled = false
+            item.subtitle = reason
+        } else {
+            item.isEnabled = enabled
+        }
+    }
+
+    private static func hotkeyHint(_ c: AppController, _ action: HotkeyAction) -> Hotkey? {
+        c.settings.hotkeys[action]
     }
 
     /// A menu entry. A global shortcut is shown on the right like a key equivalent when it is a single character.
-    private func entry(_ title: String, key hotkey: Hotkey? = nil, keyEquivalent: String = "", _ action: @escaping () -> Void) -> NSMenuItem {
+    private static func entry(_ title: String, key hotkey: Hotkey? = nil, keyEquivalent: String = "", _ action: @escaping () -> Void) -> NSMenuItem {
         let item = ClosureMenuItem(title: title, keyEquivalent: keyEquivalent, action: action)
         if let hotkey {
             let name = KeyNames.name(for: hotkey.keyCode)
@@ -168,7 +197,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         return item
     }
 
-    private func info(_ text: String) -> NSMenuItem {
+    private static func info(_ text: String) -> NSMenuItem {
         let item = NSMenuItem(title: text, action: nil, keyEquivalent: "")
         item.isEnabled = false
         return item
@@ -198,6 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: StatusItemController?
     private var settingsWindow: NSWindow?
     private lazy var layoutEditor = LayoutEditorController(controller: controller) { [weak self] pane in self?.showSettings(pane: pane) }
+    private lazy var setup = SetupWindowController(controller: controller) { [weak self] pane in self?.showSettings(pane: pane) }
     private let settingsNavigation = SettingsNavigation(defaults: .standard)
     private var settingsCancellables: Set<AnyCancellable> = []
     private var signalSources: [DispatchSourceSignal] = []
@@ -213,16 +243,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let settingsFileExisted = FileManager.default.fileExists(atPath: SettingsStore.defaultURL.path)
         statusItem = StatusItemController(controller: controller) { [weak self] in self?.showSettings() }
-        controller.openLayoutEditor = { [weak self] in self?.layoutEditor.show() }
+        controller.openLayoutEditor = { [weak self] in self?.showLayoutEditor() }
+        controller.openSetup = { [weak self] step in self?.setup.show(step: step) }
         controller.start()
         control.start()
         handleTerminationSignals()
         // Activations during launch are not the user asking for the window.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.didFinishLaunching = true }
-        // First launch, or the icon is turned off: open Settings so SnugBar can be found.
-        if !controller.settings.showIcon || !FileManager.default.fileExists(atPath: SettingsStore.defaultURL.path) {
+        // Setup never finished (feature 85): it explains the permissions. Otherwise, with the icon turned off, open
+        // Settings so SnugBar can be found.
+        if controller.setupShouldShowAtLaunch(settingsFileExisted: settingsFileExisted) {
+            setup.show()
+        } else if !controller.settings.showIcon {
             showSettings()
+        }
+    }
+
+    /// The layout editor reads the menu bar; without Accessibility the setup window explains what is missing.
+    private func showLayoutEditor() {
+        if controller.checkAvailable(.layoutEditor) {
+            layoutEditor.show()
+        } else {
+            setup.show(step: .accessibility)
         }
     }
 
@@ -255,12 +299,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Launch Services only activates an already running menu bar app when it is opened again (no reopen event), so
     /// an activation with no window open is treated the same way.
     func applicationDidBecomeActive(_ notification: Notification) {
-        guard didFinishLaunching, settingsWindow?.isVisible != true, !layoutEditor.isVisible else { return }
+        guard didFinishLaunching, settingsWindow?.isVisible != true, !layoutEditor.isVisible, !setup.isVisible else { return }
         // Opening a snugbar:// link can activate SnugBar too (before or after the link arrives); that isn't a request
         // for the window, so wait a moment to see whether a link came with this activation.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self, Date().timeIntervalSince(self.lastLinkAt) > 1.5, self.settingsWindow?.isVisible != true,
-                  !self.layoutEditor.isVisible else { return }
+                  !self.layoutEditor.isVisible, !self.setup.isVisible else { return }
             self.showSettings()
         }
     }
@@ -295,6 +339,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .store(in: &settingsCancellables)
             settingsWindow = window
         }
+        controller.refreshPermissions()
         controller.noteVisibleApps()
         // SnugBar stays an accessory app (no Dock icon) while Settings is open: switching to `.regular` at runtime
         // stops SwiftUI pop-up menus from appearing on macOS 27 (the menu tracks but its window never shows).

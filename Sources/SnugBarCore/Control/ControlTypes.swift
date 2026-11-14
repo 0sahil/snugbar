@@ -270,6 +270,10 @@ public struct ControlResponse: Codable, Equatable, Sendable {
     public var permissions: ControlPermissions?
     public var port: Int?
     public var token: Bool?
+    /// `status`: true without Accessibility (only basic hide and show work).
+    public var reducedMode: Bool?
+    /// `status`: features unavailable with the current permissions (`AppFeature` names), empty when none.
+    public var unavailable: [String]?
 
     public init(ok: Bool, error: ControlError? = nil) {
         self.ok = ok

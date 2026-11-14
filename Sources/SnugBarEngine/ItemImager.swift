@@ -143,8 +143,10 @@ public final class ItemImager {
     /// Best available image: captured this round, else cached, else the app icon.
     /// - Parameter orderPositions: the order file, so a picture saved under the item's other ID is found too (see
     ///   `ItemIdentityResolver.equivalentIDs`).
-    public func image(for item: MenuBarItem, capturedNow: Set<ItemID> = [], orderPositions: [String: Double]? = nil) -> ItemImage? {
-        if let (id, keyed) = keyedImage(for: item.id, orderPositions: orderPositions) {
+    /// - Parameter iconsOnly: the app icon even when a picture is cached (without Screen Recording, feature 86).
+    public func image(for item: MenuBarItem, capturedNow: Set<ItemID> = [], orderPositions: [String: Double]? = nil,
+                      iconsOnly: Bool = false) -> ItemImage? {
+        if !iconsOnly, let (id, keyed) = keyedImage(for: item.id, orderPositions: orderPositions) {
             let fresh = capturedNow.contains(item.id) || capturedNow.contains(id)
             return ItemImage(image: keyed.image, source: fresh ? .captured : .cached, isTemplate: keyed.isTemplate)
         }

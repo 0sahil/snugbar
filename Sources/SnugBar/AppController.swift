@@ -12,6 +12,8 @@ final class AppController: ObservableObject {
     @Published private(set) var accessibilityGranted = Permissions.accessibility
     @Published private(set) var screenRecordingGranted = Permissions.screenRecording
     @Published private(set) var orderFileGranted = false
+    /// Screen Recording was asked for and the user came back without it applying: offer a restart.
+    @Published private(set) var screenRecordingRestartHint = ScreenRecordingRestartHint()
     @Published private(set) var loginItemEnabled = LoginItem.isEnabled
     @Published private(set) var loginItemNeedsApproval = LoginItem.needsApproval
     @Published private(set) var hotkeyFailures: [String] = []
@@ -27,6 +29,10 @@ final class AppController: ObservableObject {
     @Published private(set) var layoutRevision = 0
     /// Opens the layout editor window (set by the app delegate).
     var openLayoutEditor: (() -> Void)?
+    /// Opens the setup window, on a page when given (set by the app delegate).
+    var openSetup: ((SetupStep?) -> Void)?
+    /// Checks Accessibility every few seconds so a grant or a revoke takes effect without a relaunch.
+    private var permissionTimer: Timer?
 
     let ownBundleID = Bundle.main.bundleIdentifier ?? "app.snugbar.SnugBar"
     /// SnugBar's icon in AppKit screen coordinates, when it is shown. Set by the status item.
@@ -91,9 +97,14 @@ final class AppController: ObservableObject {
 
     /// A controller that only backs an offscreen Settings render (`--debug settings-snapshot`): it uses `settings`,
     /// never reads or writes the settings file or the order file, and is never started.
-    init(preview settings: Settings) {
+    init(preview settings: Settings, grants: PermissionGrants = .all) {
         self.settings = settings
         isPreview = true
+        accessibilityGranted = grants.accessibility
+        screenRecordingGranted = grants.screenRecording
+        orderFileGranted = grants.orderFile
+        loginItemEnabled = false
+        loginItemNeedsApproval = false
     }
 
     private(set) var isPreview = false
@@ -112,12 +123,14 @@ final class AppController: ObservableObject {
         applyVisibility()
         scheduleFitCheck(after: 1.5)
         startLayout()
+        startPermissionTimer()
     }
 
     /// Stops hiding so the bar is whole when SnugBar quits (the system would also end the hide on exit).
     func stop() {
         collapseTimer?.invalidate()
         barRefreshTimer?.invalidate()
+        permissionTimer?.invalidate()
         appRevealTimers.values.forEach { $0.invalidate() }
         appRevealTimers = [:]
         bar.dismiss()
@@ -185,7 +198,8 @@ final class AppController: ObservableObject {
         // Zen locks every way of revealing.
         if state.zen && level != .collapsed { return }
         let wasMenuBarRevealed = state.menuBarReveal != .collapsed
-        let inBar = level != .collapsed && (letters || settings.revealIn == .snugBarBar)
+        // Without Accessibility there is no SnugBar Bar: hidden items show in the menu bar (feature 87).
+        let inBar = level != .collapsed && (letters || settings.revealIn == .snugBarBar) && checkAvailable(.snugBarBar)
         state.reveal = level
         state.revealInBar = inBar
         if level == .collapsed { monitor.suppressHoverUntilPointerLeaves() }
@@ -251,7 +265,7 @@ final class AppController: ObservableObject {
 
     /// Opens the SnugBar Bar with a key on each item; typing a key opens that item.
     func openByLetter() {
-        guard !state.zen else { return }
+        guard !state.zen, checkAvailable(.openByLetter) else { return }
         search.dismiss()
         if state.reveal == .collapsed || !state.revealInBar || !bar.isVisible {
             setReveal(state.reveal == .collapsed ? .expanded : state.reveal, letters: true)
@@ -261,7 +275,7 @@ final class AppController: ObservableObject {
     }
 
     func showSearch() {
-        guard !state.zen else { return }
+        guard !state.zen, checkAvailable(.search) else { return }
         if state.revealInBar && state.reveal != .collapsed { collapse() }
         search.show()
     }
@@ -271,7 +285,7 @@ final class AppController: ObservableObject {
     /// The SnugBar Bar and the search palette are ordered out first, before anything is focused or clicked, and stay
     /// closed: the item's menu must be the only thing on screen.
     func activate(_ item: MenuBarItem) {
-        guard !state.zen else { return }
+        guard !state.zen, checkAvailable(.openItems) else { return }
         let positions = prepareActivation(item)
         Task { @MainActor in
             defer { self.finishActivation() }
@@ -372,7 +386,7 @@ final class AppController: ObservableObject {
         }
         search.detail = { [weak self] item in self?.placeDescription(of: item) ?? "" }
         search.image = { [weak self] item in
-            NSImage.forBarItem(self?.imager.image(for: item, orderPositions: try? self?.orderFile.readPositions()))
+            NSImage.forBarItem(self?.itemImage(for: item, positions: try? self?.orderFile.readPositions()))
         }
         search.onActivate = { [weak self] item in self?.activate(item) }
     }
@@ -385,7 +399,7 @@ final class AppController: ObservableObject {
             items: items, sections: settings.sections, state: state, overflowHidden: effectiveOverflow, excluding: [ownBundleID]
         )
         var images: [ItemID: ItemImager.ItemImage] = [:]
-        for item in groups.flatMap(\.items) { images[item.id] = imager.image(for: item, orderPositions: positions) }
+        for item in groups.flatMap(\.items) { images[item.id] = itemImage(for: item, positions: positions) }
         // An app's items without a picture of their own would all show its icon: they share one tile.
         let tiled = groups.map { group in
             (group.kind, BarListing.tiles(for: group.items) { item in
@@ -435,6 +449,11 @@ final class AppController: ObservableObject {
                 self.bar.update(groups: self.barGroups(letters: false))
             }
         }
+    }
+
+    /// The picture for an item: captured or cached with Screen Recording, the app icon without it (feature 86).
+    func itemImage(for item: MenuBarItem, positions: [String: Double]?) -> ItemImager.ItemImage? {
+        imager.image(for: item, orderPositions: positions, iconsOnly: !availability.showsItemPictures)
     }
 
     /// How long a capture waits at most for items to settle; items still moving after that keep their old pictures.
@@ -654,11 +673,14 @@ final class AppController: ObservableObject {
         }
     }
 
-    /// How `order` moves items now: the order file when access is granted, else ⌘-drag (needs Accessibility).
+    /// How `order` moves items now: the order file when access is granted, else ⌘-drag. Either way the items are
+    /// found by reading the menu bar, so nothing without Accessibility.
     var controlArranger: ControlArranger? {
-        if orderFileGranted || orderFile.status == .granted { return .orderFile }
-        return Permissions.accessibility ? .drag : nil
+        guard Permissions.accessibility else { return nil }
+        return hasOrderFileAccess ? .orderFile : .drag
     }
+
+    var hasOrderFileAccess: Bool { orderFileGranted || orderFile.status == .granted }
 
     /// Moves a shown item next to another with the Arranger (order file, or the ⌘-drag fallback).
     func order(_ item: MenuBarItem, _ placement: ControlPlacement) async throws -> ControlArranger {
@@ -755,6 +777,7 @@ final class AppController: ObservableObject {
     }
 
     func grantScreenRecording() {
+        screenRecordingRestartHint.noteRequested()
         Permissions.requestScreenRecording()
         refreshPermissions()
     }
@@ -764,6 +787,14 @@ final class AppController: ObservableObject {
         refreshPermissions()
     }
 
+    /// What works with the permissions as last checked (features 86, 87).
+    var availability: FeatureAvailability {
+        FeatureAvailability(accessibility: accessibilityGranted, screenRecording: screenRecordingGranted, orderFile: orderFileGranted)
+    }
+
+    /// Re-reads every permission and applies a change of Accessibility at once (no relaunch). Called on activation,
+    /// when the menu opens, when the setup or Settings window appears, every second while the setup window or the
+    /// Permissions pane is open, and by the Accessibility timer.
     func refreshPermissions() {
         guard !isPreview else { return }
         let hadAccessibility = accessibilityGranted
@@ -771,9 +802,95 @@ final class AppController: ObservableObject {
         screenRecordingGranted = Permissions.screenRecording
         orderFileGranted = orderFile.status == .granted
         refreshLoginItem()
-        if accessibilityGranted, !hadAccessibility {
+        if accessibilityGranted != hadAccessibility { accessibilityChanged() }
+    }
+
+    /// For `--debug setup-snapshot --restart-hint`: as if Screen Recording had been asked for and the user came back.
+    func previewRestartHint() {
+        guard isPreview else { return }
+        screenRecordingRestartHint.noteRequested()
+        screenRecordingRestartHint.noteReturned()
+    }
+
+    /// SnugBar became active again: the user may be back from System Settings.
+    func noteReturnedToApp() {
+        guard !isPreview else { return }
+        screenRecordingRestartHint.noteReturned()
+        refreshPermissions()
+    }
+
+    /// Whether a feature can be used now. Re-checks Accessibility first (one cheap call), so a revoke is noticed the
+    /// moment a feature that needs it is asked for.
+    @discardableResult
+    func checkAvailable(_ feature: AppFeature) -> Bool {
+        if !isPreview, feature.requirements.contains(.accessibility), Permissions.accessibility != accessibilityGranted {
+            refreshPermissions()
+        }
+        return availability.isAvailable(feature)
+    }
+
+    /// Accessibility is the only permission that can't be watched cheaply from its effects, and there is no
+    /// notification for changes. `AXIsProcessTrusted` is a cheap local check, so it runs every 5 s; a change runs a
+    /// full refresh. This picks up a grant made outside the setup window and a revoke while SnugBar is in the
+    /// background.
+    private func startPermissionTimer() {
+        permissionTimer?.invalidate()
+        let timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, Permissions.accessibility != self.accessibilityGranted else { return }
+                self.refreshPermissions()
+            }
+        }
+        timer.tolerance = 1
+        RunLoop.main.add(timer, forMode: .common)
+        permissionTimer = timer
+    }
+
+    /// Full mode starts or ends: gestures, the Notification Center guard, panels, the fit check and the layout keeper
+    /// follow the new state. Granted: learn the menu bar and re-apply everything. Revoked: close the reader-driven
+    /// panels and fall back to basic hide and show; nothing that needs the reader keeps running.
+    private func accessibilityChanged() {
+        configureMonitor()
+        if accessibilityGranted {
             noteVisibleApps()
-            applyVisibility()
+            applyVisibility(force: true)
+            scheduleFitCheck(after: 1.5)
+            keeper.trigger(.launch, after: 2)
+        } else {
+            bar.dismiss()
+            search.dismiss()
+            barRefreshTimer?.invalidate()
+            notificationGuard.stop()
+            if state.revealInBar {
+                state.revealInBar = false
+                state.reveal = .collapsed
+            }
+            overflowHidden = []
+            applyVisibility(force: activeHider != nil)
+        }
+    }
+
+    // MARK: - Setup (feature 85)
+
+    /// Applies the launch decision: stores the migrated value and says whether to show the setup window.
+    func setupShouldShowAtLaunch(settingsFileExisted: Bool) -> Bool {
+        let decision = SetupLaunchDecision.decide(
+            setupCompleted: settings.setupCompleted, settingsFileExists: settingsFileExisted, accessibility: Permissions.accessibility
+        )
+        if let value = decision.store { setSetupCompleted(value) }
+        return decision.show
+    }
+
+    /// The setup window was finished or closed.
+    func markSetupCompleted() { setSetupCompleted(true) }
+
+    private func setSetupCompleted(_ value: Bool) {
+        guard settings.setupCompleted != value else { return }
+        if loadFailed || isPreview {
+            // Never replace a settings file that couldn't be read just to remember this.
+            settings.setupCompleted = value
+        } else {
+            update { $0.setupCompleted = value }
         }
     }
 
@@ -827,7 +944,8 @@ final class AppController: ObservableObject {
                 try hider.hide(allowing: allowed)
                 activeHider = hider
                 currentAllowed = allowed
-                if hider === assessment { notificationGuard.start() }
+                // The guard reads the clock's frame from the menu bar, which needs Accessibility.
+                if hider === assessment, availability.isAvailable(.notificationCenter) { notificationGuard.start() } else { notificationGuard.stop() }
                 lastError = nil
             } catch {
                 lastError = "\(error)"
@@ -904,10 +1022,13 @@ final class AppController: ObservableObject {
 
     private func configureMonitor() {
         var options = MenuBarEventMonitor.Options()
-        options.clickEmptyBar = settings.reveal.clickEmptyBar
-        options.hover = settings.reveal.hover
+        // Gestures on the menu bar need the reader (an "empty" spot is one without an item); without Accessibility
+        // only the click-outside watch for auto-collapse stays.
+        let gestures = availability.isAvailable(.revealGestures)
+        options.clickEmptyBar = gestures && settings.reveal.clickEmptyBar
+        options.hover = gestures && settings.reveal.hover
         options.hoverDelay = settings.reveal.hoverDelay
-        options.scroll = settings.reveal.scroll
+        options.scroll = gestures && settings.reveal.scroll
         options.clicksOutside = settings.autoCollapse.enabled && settings.autoCollapse.onClickOutside
         monitor.visibleBundleFilter = { [weak self] bundle in
             guard let self else { return true }
@@ -987,7 +1108,7 @@ final class AppController: ObservableObject {
         observers.append(NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshPermissions() }
+            MainActor.assumeIsolated { self?.noteReturnedToApp() }
         })
     }
 

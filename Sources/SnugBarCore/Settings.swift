@@ -49,6 +49,9 @@ public struct Settings: Codable, Equatable, Sendable {
     /// The macOS build seen at the last launch; a different build means macOS was updated, so the layout is backed up
     /// and checked.
     public var lastSystemBuild: String?
+    /// The setup window was finished or closed (feature 85). Nil in files from before it existed: see
+    /// `SetupLaunchDecision`. Not taken over from an imported file (it belongs to this Mac).
+    public var setupCompleted: Bool?
 
     public init(
         schemaVersion: Int = Settings.currentSchemaVersion,
@@ -65,7 +68,8 @@ public struct Settings: Codable, Equatable, Sendable {
         controlServer: ControlServerSettings = ControlServerSettings(),
         urlScheme: URLSchemeSettings = URLSchemeSettings(),
         layout: DesiredLayout = DesiredLayout(),
-        lastSystemBuild: String? = nil
+        lastSystemBuild: String? = nil,
+        setupCompleted: Bool? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.sections = sections
@@ -82,6 +86,7 @@ public struct Settings: Codable, Equatable, Sendable {
         self.urlScheme = urlScheme
         self.layout = layout
         self.lastSystemBuild = lastSystemBuild
+        self.setupCompleted = setupCompleted
     }
 
     /// A fresh install: every third-party app hidden, no hotkeys, no personal data.
@@ -91,7 +96,7 @@ public struct Settings: Codable, Equatable, Sendable {
         case schemaVersion, sections, hider, showIcon, autoCollapse, reveal, hotkeys, knownApps
         case revealIn, moveItemsThatDontFit, recentItems
         case controlServer, urlScheme
-        case layout, lastSystemBuild
+        case layout, lastSystemBuild, setupCompleted
     }
 
     public init(from decoder: Decoder) throws {
@@ -111,6 +116,7 @@ public struct Settings: Codable, Equatable, Sendable {
         urlScheme = try c.decodeIfPresent(URLSchemeSettings.self, forKey: .urlScheme) ?? URLSchemeSettings()
         layout = try c.decodeIfPresent(DesiredLayout.self, forKey: .layout) ?? DesiredLayout()
         lastSystemBuild = try c.decodeIfPresent(String.self, forKey: .lastSystemBuild)
+        setupCompleted = try c.decodeIfPresent(Bool.self, forKey: .setupCompleted)
     }
 
     /// Records that an item was opened: it moves to the front of `recentItems`, which keeps `RecentItems.limit`.

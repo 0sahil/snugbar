@@ -135,6 +135,7 @@ extension AppController {
         var rows: [SnugBarCore.Section: [LayoutTile]]
         var images: [String: NSImage]
         var orderAccess: Bool
+        var pictures: Bool
     }
 
     func layoutEditorContent() -> LayoutEditorContent {
@@ -144,7 +145,7 @@ extension AppController {
             .filter { $0.ownerBundleID != ownBundleID }
         let positions = try? orderFile.readPositions()
         var images: [ItemID: ItemImager.ItemImage] = [:]
-        for item in items { images[item.id] = imager.image(for: item, orderPositions: positions) }
+        for item in items { images[item.id] = itemImage(for: item, positions: positions) }
         let rows = LayoutEditorRows.rows(
             items: items, liveShown: liveLayoutKeys(live), sections: settings.sections, layout: settings.layout, positions: positions
         ) { images[$0.id].map { $0.source != .appIcon } ?? false }
@@ -153,7 +154,8 @@ extension AppController {
             guard let first = tile.items.first else { continue }
             tileImages[tile.key] = NSImage.forBarItem(images[first.id])
         }
-        return LayoutEditorContent(rows: rows, images: tileImages, orderAccess: positions != nil)
+        return LayoutEditorContent(rows: rows, images: tileImages, orderAccess: positions != nil,
+                                   pictures: availability.showsItemPictures)
     }
 
     /// A drop that orders a section's row (and apps that move into the section). Hidden and Always Hidden are only
@@ -292,7 +294,11 @@ extension AppController {
         backupNow(reason: "import")
         let removed = settings.layout.spacers.filter { old in !imported.layout.spacers.contains { $0.id == old.id } }
         for spacer in removed { spacerBar.forget(spacer) }
-        update { $0 = imported }
+        // Whether setup was done belongs to this Mac, not to the imported file.
+        update { [setupCompleted = settings.setupCompleted] in
+            $0 = imported
+            $0.setupCompleted = setupCompleted
+        }
         layoutMessage = "Imported settings from \(url.lastPathComponent). A backup of the layout was saved first."
         keeper.trigger(.settingsImported)
         layoutChanged()

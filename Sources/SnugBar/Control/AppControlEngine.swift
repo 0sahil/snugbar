@@ -29,7 +29,7 @@ final class AppControlEngine: ControlEngine {
 
     func click(_ item: MenuBarItem) async throws -> String {
         guard Permissions.accessibility else {
-            throw ControlError(.unavailable, "opening items needs Accessibility permission for SnugBar")
+            throw ControlError(.unavailable, PermissionText.needsAccessibility("Opening an item"))
         }
         do {
             return try await controller.open(item).method.rawValue
@@ -70,7 +70,7 @@ final class AppControlEngine: ControlEngine {
             permissions: ControlPermissions(
                 accessibility: Permissions.accessibility,
                 screenRecording: Permissions.screenRecording,
-                menuBarFolder: controller.controlArranger == .orderFile
+                menuBarFolder: controller.hasOrderFileAccess
             ),
             version: AppInfo.version,
             port: s.port,
