@@ -114,8 +114,9 @@ struct DebugRunner {
         case "search": return searchItems()
         case "letters": return letters()
         case "bar-items": return barItems()
+        case "key-images": return try keyImages()
         default:
-            throw Failure("unknown command '\(invocation.command)'; use status, list, hide, click, move, capture, order-file, input, fit-plan, search, letters or bar-items")
+            throw Failure("unknown command '\(invocation.command)'; use status, list, hide, click, move, capture, order-file, input, fit-plan, search, letters, bar-items or key-images")
         }
     }
 
@@ -370,7 +371,7 @@ struct DebugRunner {
         var captured: Set<ItemID> = []
         var captureError: String?
         do {
-            captured = Set(try await imager.refresh(snap.items))
+            captured = Set(try await imager.refresh(snap.items) { [reader] in reader.currentFrames() })
         } catch {
             captureError = String(describing: error)
         }

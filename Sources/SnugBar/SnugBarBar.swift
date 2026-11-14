@@ -33,6 +33,10 @@ final class SnugBarBarController {
     var onDismiss: (() -> Void)?
     /// A click outside the bar, in global top-left coordinates. The owner decides whether it closes the bar.
     var onClickOutside: ((CGPoint) -> Void)?
+    /// SnugBar's icon, in AppKit screen coordinates. A press on it is not a click outside the bar and doesn't close
+    /// it on focus loss either: the icon's action (on mouse-up) closes the bar. Otherwise the mouse-down closed it
+    /// and the action opened it again.
+    var ownIconFrame: (() -> NSRect?)?
 
     private let model = Model()
     private var panel: OverlayPanel?
@@ -109,6 +113,8 @@ final class SnugBarBarController {
         panel.onMouseDown = { [weak self] in self?.hoverLabel.hide() }
         panel.onResignKey = { [weak self] in
             guard let self, !self.dismissing, self.isVisible else { return }
+            // A press on SnugBar's icon: its action closes the bar.
+            if NSEvent.isPressingOnOwnIcon(self.ownIconFrame?()) { return }
             // Focus went elsewhere (another window or app): the bar is done.
             self.userDismissed()
         }
@@ -188,7 +194,8 @@ final class SnugBarBarController {
             let location = event.cgEvent?.location
             MainActor.assumeIsolated {
                 guard let self, let panel = self.panel, panel.isVisible else { return }
-                if NSMouseInRect(NSEvent.mouseLocation, panel.frame, false) { return }
+                guard MenuBarGeometry.isClickOutside(NSEvent.mouseLocation, panel: panel.frame, ownIcon: self.ownIconFrame?())
+                else { return }
                 if let location { self.onClickOutside?(location) }
             }
         }) {

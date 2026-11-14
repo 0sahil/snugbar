@@ -40,6 +40,10 @@ public final class ItemActivator {
     public var appearTimeout: TimeInterval = 1.5
     /// Delay before re-hiding a temporarily allowed app after the user clicks elsewhere.
     public var rehideDelay: TimeInterval = 0.3
+    /// After focusing a hidden item: wait at least this long, then until the items hold still (see `settledSnapshot`).
+    public var settleMinimum: TimeInterval = 0.15
+    public var settleInterval: TimeInterval = 0.06
+    public var settleTimeout: TimeInterval = 0.8
     /// Called after a hidden item has been focused into view and before it is clicked, with the item as it is now and
     /// every item on screen at that moment. Lets the app capture a picture of an item that is otherwise never visible.
     public var beforeClick: (@MainActor (MenuBarItem, [MenuBarItem]) async -> Void)?
@@ -72,8 +76,9 @@ public final class ItemActivator {
                 hider.endFocus()
                 throw ActivationError.itemDidNotAppear(item.id)
             }
-            try? await Task.sleep(nanoseconds: 150_000_000) // let the bar settle after reflowing
-            let settled = reader.snapshot(orderPositions: orderPositions)
+            // Let the bar settle after reflowing: items slide into place, and a picture or a click taken mid-slide
+            // lands on the wrong part of the item.
+            let settled = await settledSnapshot(focus: focus, orderPositions: orderPositions)
             entry = settled.entries.first {
                 $0.item.ownerBundleID == item.ownerBundleID && $0.indexInApp == (entry?.indexInApp ?? 0) && !$0.item.isOverflowed
             } ?? entry
@@ -135,6 +140,25 @@ public final class ItemActivator {
     }
 
     // MARK: - Private
+
+    /// A snapshot once the focused apps' items have stopped moving: two reads `settleInterval` apart agree, after at
+    /// least `settleMinimum` and at most `settleTimeout`.
+    private func settledSnapshot(focus: Set<String>, orderPositions: [String: Double]?) async -> MenuBarSnapshot {
+        func frames(_ s: MenuBarSnapshot) -> [ItemID: CGRect] {
+            Dictionary(s.items.filter { $0.isAppleItem || focus.contains($0.ownerBundleID) }.map { ($0.id, $0.frame.cgRect) },
+                       uniquingKeysWith: { a, _ in a })
+        }
+        let start = Date()
+        try? await Task.sleep(nanoseconds: UInt64(settleMinimum * 1_000_000_000))
+        var snapshot = reader.snapshot(orderPositions: orderPositions)
+        while Date().timeIntervalSince(start) < settleTimeout {
+            try? await Task.sleep(nanoseconds: UInt64(settleInterval * 1_000_000_000))
+            let next = reader.snapshot(orderPositions: orderPositions)
+            defer { snapshot = next }
+            if frames(next) == frames(snapshot) { return next }
+        }
+        return snapshot
+    }
 
     private func waitForEntry(_ item: MenuBarItem, orderPositions: [String: Double]?) async -> MenuBarEntry? {
         let start = Date()

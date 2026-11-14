@@ -109,3 +109,70 @@ final class OrderFileLocationTests: XCTestCase {
         XCTAssertNil(OrderFileAccess.plistURL(forPicked: URL(fileURLWithPath: "/tmp/home/Library/Preferences")))
     }
 }
+
+final class ClickOutsideTests: XCTestCase {
+    // AppKit coordinates on a 1470×956 pt screen: SnugBar's icon in the menu bar, the bar just below it.
+    let icon = CGRect(x: 1180, y: 923, width: 28, height: 33)
+    let bar = CGRect(x: 900, y: 860, width: 312, height: 59)
+
+    func testAPressOnSnugBarsOwnIconIsNotOutside() {
+        // The icon's action closes the bar; counting the press as outside closed it first and the action reopened it.
+        XCTAssertFalse(MenuBarGeometry.isClickOutside(CGPoint(x: 1194, y: 940), panel: bar, ownIcon: icon))
+        XCTAssertFalse(MenuBarGeometry.isClickOutside(CGPoint(x: 1181, y: 924), panel: bar, ownIcon: icon), "near the icon's corner")
+    }
+
+    func testAPressInTheBarIsNotOutside() {
+        XCTAssertFalse(MenuBarGeometry.isClickOutside(CGPoint(x: 1000, y: 880), panel: bar, ownIcon: icon))
+    }
+
+    func testPressesElsewhereAreOutside() {
+        XCTAssertTrue(MenuBarGeometry.isClickOutside(CGPoint(x: 400, y: 500), panel: bar, ownIcon: icon), "the desktop")
+        XCTAssertTrue(MenuBarGeometry.isClickOutside(CGPoint(x: 1150, y: 940), panel: bar, ownIcon: icon), "another menu bar item")
+        XCTAssertTrue(MenuBarGeometry.isClickOutside(CGPoint(x: 1194, y: 921), panel: bar, ownIcon: icon), "between the bar and the icon")
+    }
+
+    func testWithoutAnIconOnlyThePanelCounts() {
+        // The icon can be turned off (or not placed yet).
+        XCTAssertTrue(MenuBarGeometry.isClickOutside(CGPoint(x: 1194, y: 940), panel: bar, ownIcon: nil))
+        XCTAssertTrue(MenuBarGeometry.isClickOutside(CGPoint(x: 1194, y: 940), panel: bar, ownIcon: .zero))
+        XCTAssertFalse(MenuBarGeometry.isClickOutside(CGPoint(x: 1000, y: 880), panel: bar, ownIcon: nil))
+    }
+}
+
+final class CleanCaptureTests: XCTestCase {
+    // Global top-left coordinates: a 1470 pt wide display whose notch spans 645.5...824.5.
+    let display = CGRect(x: 0, y: 0, width: 1470, height: 956)
+    let notch = CGRect(x: 645.5, y: 0, width: 179, height: 33)
+    let item = CGRect(x: 900, y: 0, width: 32, height: 33)
+
+    func testAStillItemClearOfTheNotchIsKept() {
+        XCTAssertTrue(MenuBarGeometry.isCleanCapture(frame: item, frameAfter: item, display: display, notch: notch))
+        XCTAssertTrue(MenuBarGeometry.isCleanCapture(frame: item, frameAfter: item.offsetBy(dx: 0.5, dy: 0), display: display, notch: notch),
+                      "sub-point rounding isn't movement")
+        XCTAssertTrue(MenuBarGeometry.isCleanCapture(frame: item, frameAfter: item, display: display, notch: nil))
+    }
+
+    func testAnItemThatMovedDuringTheCaptureIsDropped() {
+        // Items still sliding after a hide changed: the crop holds part of the glyph.
+        XCTAssertFalse(MenuBarGeometry.isCleanCapture(frame: item, frameAfter: item.offsetBy(dx: -16, dy: 0), display: display, notch: notch))
+        XCTAssertFalse(MenuBarGeometry.isCleanCapture(
+            frame: item, frameAfter: CGRect(x: 900, y: 0, width: 40, height: 33), display: display, notch: notch), "width changed")
+        XCTAssertFalse(MenuBarGeometry.isCleanCapture(frame: item, frameAfter: nil, display: display, notch: notch), "gone")
+    }
+
+    func testAnItemPartlyBehindTheNotchIsDropped() {
+        let underRightEdge = CGRect(x: 810, y: 0, width: 32, height: 33)
+        let underLeftEdge = CGRect(x: 630, y: 0, width: 32, height: 33)
+        XCTAssertFalse(MenuBarGeometry.isCleanCapture(frame: underRightEdge, frameAfter: underRightEdge, display: display, notch: notch))
+        XCTAssertFalse(MenuBarGeometry.isCleanCapture(frame: underLeftEdge, frameAfter: underLeftEdge, display: display, notch: notch))
+        // Touching the notch's edge (rounding) is fine.
+        let beside = CGRect(x: 824.5, y: 0, width: 32, height: 33)
+        XCTAssertTrue(MenuBarGeometry.isCleanCapture(frame: beside, frameAfter: beside, display: display, notch: notch))
+    }
+
+    func testAnItemOffTheDisplayIsDropped() {
+        let offRight = CGRect(x: 1450, y: 0, width: 32, height: 33)
+        XCTAssertFalse(MenuBarGeometry.isCleanCapture(frame: offRight, frameAfter: offRight, display: display, notch: nil))
+        XCTAssertFalse(MenuBarGeometry.isCleanCapture(frame: .zero, frameAfter: .zero, display: display, notch: nil), "no frame")
+    }
+}

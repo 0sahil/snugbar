@@ -75,7 +75,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         if wantsMenu || controller.state.zen {
             showMenu()
         } else {
-            controller.toggle()
+            controller.iconClicked()
         }
     }
 

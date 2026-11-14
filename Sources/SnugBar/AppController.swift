@@ -115,6 +115,17 @@ final class AppController: ObservableObject {
     ///   scroll, a click on the empty bar) pass false so typing stays in the frontmost app.
     func toggle(focusBar: Bool = true) { setReveal(state.reveal == .collapsed ? .expanded : .collapsed, focusBar: focusBar) }
 
+    /// A click on SnugBar's icon. With the search palette open it only closes search (the press already took focus
+    /// from it, which closes it, so that is remembered for this click); otherwise it toggles, which also closes an
+    /// open SnugBar Bar (the bar ignores presses on the icon, so the click isn't undone by a click-outside first).
+    func iconClicked() {
+        if search.takeIconPressDismissal() || search.isVisible {
+            search.dismiss()
+            return
+        }
+        toggle()
+    }
+
     func toggleAlwaysHidden() { setReveal(state.reveal == .all ? .collapsed : .all) }
 
     func expand(focusBar: Bool = true) { if state.reveal == .collapsed { setReveal(.expanded, focusBar: focusBar) } }
@@ -267,9 +278,10 @@ final class AppController: ObservableObject {
             guard let self else { return }
             // Remember the focused app's real items (it may have been listed by a placeholder until now).
             self.catalog.record(visibleItems.filter { $0.ownerBundleID == item.ownerBundleID }, isOnScreen: { _ in true })
-            guard !self.imager.hasCachedImage(for: item.id, orderPositions: try? self.orderFile.readPositions()),
+            let positions = try? self.orderFile.readPositions()
+            guard !self.imager.hasCachedImage(for: item.id, orderPositions: positions),
                   Permissions.screenRecording else { return }
-            _ = try? await self.imager.refresh(visibleItems)
+            _ = try? await self.imager.refresh(visibleItems) { [reader = self.reader] in reader.currentFrames(orderPositions: positions) }
         }
         return activator
     }
@@ -280,6 +292,8 @@ final class AppController: ObservableObject {
             guard let self, self.state.revealInBar, self.state.reveal != .collapsed else { return }
             self.collapse()
         }
+        bar.ownIconFrame = { [weak self] in self?.iconFrame?() }
+        search.ownIconFrame = { [weak self] in self?.iconFrame?() }
         bar.onClickOutside = { [weak self] point in
             guard let self else { return }
             // A click on an empty part of the menu bar toggles through the reveal gesture; leave it to that.
@@ -342,12 +356,13 @@ final class AppController: ObservableObject {
               !assessment.isFocusing, !assessment.isSuspended
         else { done?(); return }
         let onScreen = currentAllowed
-        let items = reader.snapshot(orderPositions: try? orderFile.readPositions()).items.filter { item in
+        let positions = try? orderFile.readPositions()
+        let items = reader.snapshot(orderPositions: positions).items.filter { item in
             item.isAppleItem || onScreen?.contains(item.ownerBundleID) ?? true
         }
         captureInFlight = true
         Task { @MainActor in
-            _ = try? await self.imager.refresh(items)
+            _ = try? await self.imager.refresh(items) { [reader = self.reader] in reader.currentFrames(orderPositions: positions) }
             self.captureInFlight = false
             done?()
         }

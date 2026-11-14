@@ -62,8 +62,15 @@ public final class ItemImager {
     }
 
     /// Captures the strip and refreshes the cache for every visible item. Returns the IDs captured.
+    ///
+    /// A picture is only kept when `MenuBarGeometry.isCleanCapture` accepts it (the item didn't move during the
+    /// capture, is fully on screen and clear of the notch); otherwise the item keeps its earlier picture.
+    /// - Parameter framesAfterCapture: reads the items' frames again once the capture is done. Without it the frames
+    ///   are assumed unchanged.
     @discardableResult
-    public func refresh(_ items: [MenuBarItem]) async throws -> [ItemID] {
+    public func refresh(
+        _ items: [MenuBarItem], framesAfterCapture: (@MainActor () -> [ItemID: CGRect])? = nil
+    ) async throws -> [ItemID] {
         guard CGPreflightScreenCaptureAccess() else { throw CaptureError.noPermission }
         let visible = items.filter { !$0.isOverflowed && $0.frame.width > 0 }
         guard !visible.isEmpty else { return [] }
@@ -100,10 +107,17 @@ public final class ItemImager {
         }
         lastCaptureDuration = Date().timeIntervalSince(started)
 
+        let after = framesAfterCapture?()
+        let notch = MenuBarScreens.strips().first { $0.frame.intersects(display.frame) }?.notch
         let pxPerPt = CGFloat(strip.width) / CGFloat(display.width)
         var captured: [ItemID] = []
         for item in visible {
-            let f = item.frame.cgRect.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
+            let frame = item.frame.cgRect
+            // No second read: assume it stayed. A second read without the item: it went away, so the crop is suspect.
+            let frameAfter: CGRect? = after == nil ? frame : after?[item.id]
+            guard MenuBarGeometry.isCleanCapture(frame: frame, frameAfter: frameAfter, display: display.frame, notch: notch)
+            else { continue }
+            let f = frame.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
             let crop = CGRect(x: f.minX * pxPerPt, y: f.minY * pxPerPt, width: f.width * pxPerPt, height: f.height * pxPerPt)
                 .integral
                 .intersection(CGRect(x: 0, y: 0, width: strip.width, height: strip.height))
@@ -192,6 +206,13 @@ public final class ItemImager {
         guard let icon else { return nil }
         var rect = CGRect(x: 0, y: 0, width: size, height: size)
         return icon.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+    }
+}
+
+extension MenuBarReader {
+    /// The items' frames now, by ID: the second read for `ItemImager.refresh(_:framesAfterCapture:)`.
+    public func currentFrames(orderPositions: [String: Double]? = nil) -> [ItemID: CGRect] {
+        Dictionary(snapshot(orderPositions: orderPositions).items.map { ($0.id, $0.frame.cgRect) }, uniquingKeysWith: { a, _ in a })
     }
 }
 

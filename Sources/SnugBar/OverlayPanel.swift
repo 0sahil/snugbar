@@ -73,6 +73,16 @@ final class OverlayPanel: NSPanel {
     }
 }
 
+extension NSEvent {
+    /// True while a mouse button is down on SnugBar's icon (`iconFrame` in AppKit screen coordinates): the press
+    /// that is about to become a click on the icon.
+    @MainActor
+    static func isPressingOnOwnIcon(_ iconFrame: NSRect?) -> Bool {
+        guard let iconFrame, !iconFrame.isEmpty, pressedMouseButtons != 0 else { return false }
+        return NSMouseInRect(mouseLocation, iconFrame, false)
+    }
+}
+
 extension NSScreen {
     /// Height of the menu bar on this screen (falls back to the status bar thickness when the bar auto-hides).
     var menuBarHeight: CGFloat {

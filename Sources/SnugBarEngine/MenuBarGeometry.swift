@@ -37,6 +37,36 @@ public enum MenuBarGeometry {
         frame.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
     }
 
+    /// Whether a mouse-down closes a panel (the SnugBar Bar, the search palette) as a click outside it.
+    ///
+    /// A press on SnugBar's own icon is not outside: the icon's action, on mouse-up, decides what that click does
+    /// (close the bar, close search). Treating its mouse-down as outside closed the bar and the action then opened it
+    /// again. The point and both rects are in the same coordinate space.
+    public static func isClickOutside(_ point: CGPoint, panel: CGRect, ownIcon: CGRect?) -> Bool {
+        if panel.contains(point) { return false }
+        if let ownIcon, !ownIcon.isEmpty, ownIcon.contains(point) { return false }
+        return true
+    }
+
+    /// Whether a captured picture of a menu bar item can be kept, in global top-left coordinates.
+    ///
+    /// The capture is cropped by the item's frame as read before capturing, so the picture is only the item when the
+    /// item sat still and was fully drawn: its frame read after capturing must agree (items reflow for a moment after
+    /// a hide changes or another item changes width, and a crop taken then shows part of the glyph), the whole frame
+    /// must be on the display, and none of it may be behind the notch (drawn black there).
+    /// - Parameter frameAfter: the item's frame read after capturing; nil when it was gone by then.
+    public static func isCleanCapture(
+        frame: CGRect, frameAfter: CGRect?, display: CGRect, notch: CGRect?, tolerance: CGFloat = 1
+    ) -> Bool {
+        guard frame.width > 0, frame.height > 0, let frameAfter else { return false }
+        let moved = abs(frame.minX - frameAfter.minX) > tolerance || abs(frame.minY - frameAfter.minY) > tolerance
+            || abs(frame.width - frameAfter.width) > tolerance || abs(frame.height - frameAfter.height) > tolerance
+        if moved { return false }
+        if !display.insetBy(dx: -tolerance, dy: -tolerance).contains(frame) { return false }
+        if let notch, frame.insetBy(dx: tolerance, dy: 0).intersects(notch) { return false }
+        return true
+    }
+
     /// Picks which of an app's `AXExtrasMenuBar` children corresponds to one of its menu bar items.
     ///
     /// - Parameters:

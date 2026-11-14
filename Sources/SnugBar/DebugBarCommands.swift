@@ -225,4 +225,112 @@ extension DebugRunner {
         }
         return BarItemsResult(problem: c.problem, imageCache: ItemImager.defaultCacheDirectory.path, groups: groups)
     }
+
+    // MARK: - key-images
+
+    struct KeyImagesResult: Encodable {
+        struct File: Encodable {
+            var name: String
+            var width: Int
+            var height: Int
+            /// Nil when nothing was left after keying.
+            var keyedWidth: Int?
+            var keyedHeight: Int?
+            var isTemplate: Bool?
+            var background: [Double]?
+            /// `--map`: the input's rows (`#` close to the background-free glyph, `.` background) and the keyed
+            /// alpha (` .:-=+*#%@` from 0 to 1).
+            var inputMap: [String]?
+            var alphaMap: [String]?
+        }
+        var from: String
+        var to: String?
+        var files: [File]
+    }
+
+    /// `key-images [--from <dir>] [--to <dir>] [--match <text>] [--map]`: keys the cached captures (default: the image
+    /// cache) and, with `--to`, writes `<name>.png` (keyed, as the app keeps it) and `<name>-preview.png` (8× on a dark
+    /// tile, templates drawn white) there. Only reads `--from`.
+    func keyImages() throws -> KeyImagesResult {
+        let from = invocation.value(after: "--from").map { URL(fileURLWithPath: $0) } ?? ItemImager.defaultCacheDirectory
+        let to = invocation.value(after: "--to").map { URL(fileURLWithPath: $0, isDirectory: true) }
+        if let to {
+            guard to.standardizedFileURL.path != from.standardizedFileURL.path else { throw Failure("--to must differ from --from") }
+            try FileManager.default.createDirectory(at: to, withIntermediateDirectories: true)
+        }
+        let match = invocation.value(after: "--match")
+        let names = try FileManager.default.contentsOfDirectory(atPath: from.path)
+            .filter { $0.hasSuffix(".png") && (match == nil || $0.contains(match!)) }
+            .sorted()
+        var files: [KeyImagesResult.File] = []
+        for name in names {
+            guard let source = CGImageSourceCreateWithURL(from.appendingPathComponent(name) as CFURL, nil),
+                  let raw = CGImageSourceCreateImageAtIndex(source, 0, nil),
+                  let bitmap = GlyphImage.bitmap(from: raw)
+            else { continue }
+            let result = GlyphKeyer.key(bitmap)
+            var file = KeyImagesResult.File(name: name, width: raw.width, height: raw.height)
+            if let result {
+                file.keyedWidth = result.bitmap.width
+                file.keyedHeight = result.bitmap.height
+                file.isTemplate = result.isTemplate
+                file.background = result.background.map { [$0.r, $0.g, $0.b] }
+                if invocation.arguments.contains("--map") {
+                    file.inputMap = Self.lumaMap(bitmap)
+                    file.alphaMap = Self.alphaMap(result.bitmap)
+                }
+                if let to, let keyed = GlyphImage.cgImage(from: result.bitmap) {
+                    let base = to.appendingPathComponent((name as NSString).deletingPathExtension)
+                    try keyed.pngData()?.write(to: base.appendingPathExtension("png"), options: .atomic)
+                    try Self.preview(result)?.pngData()?.write(to: URL(fileURLWithPath: base.path + "-preview.png"), options: .atomic)
+                }
+            }
+            files.append(file)
+        }
+        return KeyImagesResult(from: from.path, to: to?.path, files: files)
+    }
+
+    private static let ramp = Array(" .:-=+*#%@")
+
+    private static func alphaMap(_ b: GlyphKeyer.Bitmap) -> [String] {
+        (0..<b.height).map { y in
+            String((0..<b.width).map { x in ramp[min(Int(Double(b.pixel(x: x, y: y).a) / 256 * Double(ramp.count)), ramp.count - 1)] })
+        }
+    }
+
+    private static func lumaMap(_ b: GlyphKeyer.Bitmap) -> [String] {
+        (0..<b.height).map { y in
+            String((0..<b.width).map { x in
+                let p = b.pixel(x: x, y: y)
+                let luma = (Double(p.r) + Double(p.g) + Double(p.b)) / 3
+                return ramp[min(Int(luma / 256 * Double(ramp.count)), ramp.count - 1)]
+            })
+        }
+    }
+
+    /// The keyed picture 8× on a dark tile, as the bar would draw it (templates in white).
+    private static func preview(_ result: GlyphKeyer.Result) -> CGImage? {
+        let scale = 8
+        let b = result.bitmap
+        let w = (b.width + 4) * scale, h = (b.height + 4) * scale
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let keyed = GlyphImage.cgImage(from: b),
+              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        ctx.interpolationQuality = .none
+        ctx.setFillColor(CGColor(srgbRed: 0.16, green: 0.16, blue: 0.17, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        let rect = CGRect(x: 2 * scale, y: 2 * scale, width: b.width * scale, height: b.height * scale)
+        if result.isTemplate {
+            ctx.saveGState()
+            ctx.clip(to: rect, mask: keyed)
+            ctx.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
+            ctx.fill(rect)
+            ctx.restoreGState()
+        } else {
+            ctx.draw(keyed, in: rect)
+        }
+        return ctx.makeImage()
+    }
 }
