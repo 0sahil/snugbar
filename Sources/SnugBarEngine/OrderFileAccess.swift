@@ -47,6 +47,10 @@ public final class OrderFileAccess {
     public let defaults: UserDefaults
     public let backupDirectory: URL
     private var scopedURL: URL?
+    /// SnugBar's desired layout, saved in every backup next to the system positions.
+    public var backupLayout: (() -> LayoutBackup.Layout?)?
+    /// Called after a successful write: items are about to move.
+    public var didWrite: (() -> Void)?
 
     public init(defaults: UserDefaults = .standard, backupDirectory: URL = SnugBarPaths.backups) {
         self.defaults = defaults
@@ -158,12 +162,13 @@ public final class OrderFileAccess {
     }
 
     /// Merges `changes` into the dictionary and writes it through cfprefs, after saving a backup.
-    /// - Returns: the URL of the backup.
+    /// - Parameter takeBackup: false when the caller has just saved one (restore).
+    /// - Returns: the URL of the backup, when one was taken.
     @discardableResult
-    public func write(changes: [String: Double]) throws -> URL {
+    public func write(changes: [String: Double], takeBackup: Bool = true) throws -> URL? {
         if Self.userIsCommandDragging { throw AccessError.userIsDragging }
         let current = try readRawPositions()
-        let backup = try saveBackup(current.mapValues(\.doubleValue))
+        let backup = takeBackup ? try saveBackup(current.mapValues(\.doubleValue), reason: "order") : nil
 
         var next: [String: NSNumber] = current
         for (key, value) in changes {
@@ -177,34 +182,37 @@ public final class OrderFileAccess {
         guard CFPreferencesSynchronize(appID, kCFPreferencesCurrentUser, kCFPreferencesAnyHost) else {
             throw AccessError.writeFailed
         }
+        didWrite?()
         return backup
     }
 
     /// Restores a dictionary exactly (used to undo).
-    public func restore(_ positions: [String: Double]) throws {
+    public func restore(_ positions: [String: Double], takeBackup: Bool = true) throws {
         let current = try readPositions()
         var changes = positions
         for key in current.keys where positions[key] == nil {
             // Keys that appeared since can't be removed through a merge; keep their current value.
             changes[key] = current[key]
         }
-        try write(changes: changes)
+        try write(changes: changes, takeBackup: takeBackup)
     }
 
-    private func saveBackup(_ positions: [String: Double]) throws -> URL {
-        let now = Date()
-        let backup = LayoutBackup(createdAt: now, systemBuild: SystemInfo.build, positions: positions)
-        let url = backupDirectory.appendingPathComponent(LayoutBackupPolicy.fileName(for: now))
-        try AtomicFile.write(backup.encoded(), to: url)
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: backupDirectory.path)) ?? []
-        for name in LayoutBackupPolicy.namesToPrune(names) {
-            try? FileManager.default.removeItem(at: backupDirectory.appendingPathComponent(name))
-        }
-        return url
+    /// Saves a backup of the positions as they are now (empty when the order file can't be read) and SnugBar's
+    /// desired layout, before a reset, a restore, an import or a macOS update.
+    @discardableResult
+    public func saveBackup(reason: String) throws -> URL {
+        let positions = (try? readPositions()) ?? [:]
+        return try saveBackup(positions, reason: reason)
+    }
+
+    private func saveBackup(_ positions: [String: Double], reason: String) throws -> URL {
+        let backup = LayoutBackup(createdAt: Date(), systemBuild: SystemInfo.build, positions: positions,
+                                  layout: backupLayout?(), reason: reason)
+        return try LayoutBackupStore(directory: backupDirectory).save(backup)
     }
 
     /// True while the left button is down with ⌘ held: the user may be rearranging items by hand.
-    static var userIsCommandDragging: Bool {
+    public static var userIsCommandDragging: Bool {
         NSEvent.pressedMouseButtons & 1 != 0 && NSEvent.modifierFlags.contains(.command)
     }
 }

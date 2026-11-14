@@ -30,12 +30,44 @@ scripts/build-app.sh   # release build, assembled and signed as build/SnugBar.ap
   switch apps.
 - By default, hidden items open in the SnugBar Bar, a small panel under the menu bar; click an item there to open
   its menu. Settings > General can switch this back to showing them in the menu bar itself.
+- With Menu Bar folder access, tiles in the SnugBar Bar can be dragged: within Hidden or Always Hidden to reorder it,
+  or onto the other group to move the app there. The order is saved like the layout editor's. Esc cancels a drag.
+  "Didn't Fit" items and apps the order file doesn't know yet stay put, and so does everything in letter mode.
 - When the menu bar has no room beside the notch, the leftmost shown apps move to the SnugBar Bar under "Didn't Fit"
   instead of going behind the system's overflow button (can be turned off).
 - Optional shortcuts: a search palette for every menu bar item, "open by letter" (each item in the SnugBar Bar gets a
   key), and Zen mode, which hides every app's items except Apple's and SnugBar's until you turn it off.
 - Settings live in `~/Library/Application Support/SnugBar/settings.json`, a plain JSON file.
 - SnugBar must run from /Applications: macOS hides its icon along with other apps when it runs from elsewhere.
+
+### Layout editor, spacers and backups
+
+- **Edit Layout…** (in SnugBar's menu, and in Settings > Sections and Settings > Layout) opens a window with three rows:
+  Shown, Hidden and Always Hidden, in menu bar order, with each item's picture (or its app's icon). Rest the pointer
+  on a tile for its name.
+- Drag within a row to reorder it; drag onto another row to move the app there (all items of an app move together).
+  Click selects, ⌘-click adds or removes, ⇧-click selects a range within a row, ⌘A selects everything, Esc clears;
+  dragging a selected tile moves the whole selection. Right-click offers "Move To" and, for spacers, "Remove Spacer".
+  The clock and Control Center stay at the right end and can't be moved.
+- With Menu Bar folder access, items move without the pointer moving. Without it, reordering Shown in the editor
+  uses a quick ⌘-drag of the pointer, and Hidden and Always Hidden can't be reordered (their items aren't on screen to
+  drag). Their order is kept in the order file, so it shows when the section is expanded and in the SnugBar Bar.
+- **Spacers** are empty gaps (1–64 pt, default 16) owned by SnugBar. Add them with **Add Spacer**, drag them like items,
+  set the width of a selected spacer under the rows. They live in Shown only, and are not listed in the SnugBar Bar,
+  search, open by letter or `snugbar list`. Zen mode shrinks them to nothing until it ends; they keep their place.
+- SnugBar keeps the order you arranged: after it starts, when an app relaunches, after sleep, when displays change
+  and after a macOS update it puts items back where they were. These automatic checks only write the order file; they
+  never move the pointer, so without folder access they leave the order alone. Moving items by hand with ⌘-drag in
+  the menu bar still works, and the new order is kept.
+- New apps go to the section chosen in Settings > Sections (default Hidden); SnugBar's menu says once where each new
+  app went.
+- **Backups:** before every change to the item order, and before a reset, a restore, an import or a check after a macOS
+  update, SnugBar saves the system positions and its own layout (sections, order, spacers) in
+  `~/Library/Application Support/SnugBar/backups`, keeping the last 20. Settings > Layout lists them with **Restore**
+  and **Show in Finder**, and has **Reset Layout…** (every app back in the default section, no kept order, no spacers).
+- **Export Settings… / Import Settings…** in Settings > General save or load the settings file. An import is checked
+  first (a file from a newer SnugBar is refused) and the layout is backed up before it applies. The access token and
+  the Menu Bar folder access are never part of the file.
 
 ## Command line, AI agents and links
 
@@ -50,7 +82,7 @@ turning it off stops both; `snugbar://` links don't use it. All three use the sa
 | `show <item>` / `hide <item>` | Show one app's items for a while / hide them again now |
 | `click <item>` | Open an item's menu (shows it first if it is hidden) |
 | `move <item>... <section>` | Move one or more apps to a section; all items of an app move together |
-| `order <item> --before <item>` (or `--after`) | Reorder a shown item |
+| `order <item> --before <item>` (or `--after`) | Reorder a shown item; SnugBar keeps the new order |
 | `expand`, `collapse`, `toggle`, `swap` | Show or hide the Hidden section, or swap Shown and Hidden |
 | `zen [on\|off\|toggle]` | Zen mode |
 | `status` | Hiding and arranging methods, permissions, version, port, token |
@@ -182,6 +214,13 @@ Hidden items. An app whose items have no captured image yet gets one tile in the
 seconds (default 30) with made-up items and an in-memory state: nothing on screen changes, so it can run next to the
 installed SnugBar. With `--token-file`, requests need the token in that file. The output lists the requests and what
 the fake engine was asked to do.
+
+Read-only layout commands: `layout-snapshot --fake --out <png> [--dragging]` renders the layout editor offscreen with
+made-up items; `bar-snapshot --fake --out <png> [--dragging] [--onto-other] [--no-access] [--width <pt>]` renders the
+SnugBar Bar the same way (`--dragging`: mid-drag; `--width`: narrow enough to wrap); `settings-snapshot --pane layout --out <png>` renders the Layout settings pane;
+`reconcile --dry-run [--settings <path>] [--trigger <name>] [--explicit] --out <file>` reports what a layout check
+would write (order-file values, spacer positions, ⌘-drag moves for `--explicit`) or why it would skip, without
+writing anything; `backups [--dir <dir>] --out <file>` lists layout backups.
 
 Captured item images are cached as raw crops in `~/Library/Caches/<bundle id>/ItemImages`; the menu bar background is
 keyed out when they are loaded, so they are drawn as template images in the label colour.

@@ -44,6 +44,11 @@ public struct Settings: Codable, Equatable, Sendable {
     public var controlServer: ControlServerSettings
     /// `snugbar://` links from other apps (feature 76).
     public var urlScheme: URLSchemeSettings
+    /// The order of Shown items and the spacers the user arranged, kept in place (features 37, 78–80).
+    public var layout: DesiredLayout
+    /// The macOS build seen at the last launch; a different build means macOS was updated, so the layout is backed up
+    /// and checked.
+    public var lastSystemBuild: String?
 
     public init(
         schemaVersion: Int = Settings.currentSchemaVersion,
@@ -58,7 +63,9 @@ public struct Settings: Codable, Equatable, Sendable {
         moveItemsThatDontFit: Bool = true,
         recentItems: [ItemID] = [],
         controlServer: ControlServerSettings = ControlServerSettings(),
-        urlScheme: URLSchemeSettings = URLSchemeSettings()
+        urlScheme: URLSchemeSettings = URLSchemeSettings(),
+        layout: DesiredLayout = DesiredLayout(),
+        lastSystemBuild: String? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.sections = sections
@@ -73,6 +80,8 @@ public struct Settings: Codable, Equatable, Sendable {
         self.recentItems = recentItems
         self.controlServer = controlServer
         self.urlScheme = urlScheme
+        self.layout = layout
+        self.lastSystemBuild = lastSystemBuild
     }
 
     /// A fresh install: every third-party app hidden, no hotkeys, no personal data.
@@ -82,6 +91,7 @@ public struct Settings: Codable, Equatable, Sendable {
         case schemaVersion, sections, hider, showIcon, autoCollapse, reveal, hotkeys, knownApps
         case revealIn, moveItemsThatDontFit, recentItems
         case controlServer, urlScheme
+        case layout, lastSystemBuild
     }
 
     public init(from decoder: Decoder) throws {
@@ -99,6 +109,8 @@ public struct Settings: Codable, Equatable, Sendable {
         recentItems = try c.decodeIfPresent([ItemID].self, forKey: .recentItems) ?? []
         controlServer = try c.decodeIfPresent(ControlServerSettings.self, forKey: .controlServer) ?? ControlServerSettings()
         urlScheme = try c.decodeIfPresent(URLSchemeSettings.self, forKey: .urlScheme) ?? URLSchemeSettings()
+        layout = try c.decodeIfPresent(DesiredLayout.self, forKey: .layout) ?? DesiredLayout()
+        lastSystemBuild = try c.decodeIfPresent(String.self, forKey: .lastSystemBuild)
     }
 
     /// Records that an item was opened: it moves to the front of `recentItems`, which keeps `RecentItems.limit`.

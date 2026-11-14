@@ -152,6 +152,6 @@ extension DebugRunner {
 }
 
 /// A window that may sit outside every screen.
-private final class OffscreenWindow: NSWindow {
+final class OffscreenWindow: NSWindow {
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }

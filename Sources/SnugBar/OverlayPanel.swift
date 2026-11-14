@@ -10,6 +10,8 @@ final class OverlayPanel: NSPanel {
     var onResignKey: (() -> Void)?
     /// Sees mouse-down events in the panel (they still go on to the view under the pointer).
     var onMouseDown: (() -> Void)?
+    /// Sees left-button down, dragged and up events first; return true to consume one.
+    var mouseHandler: ((NSEvent) -> Bool)?
 
     init(contentRect: NSRect = NSRect(x: 0, y: 0, width: 200, height: 40)) {
         super.init(contentRect: contentRect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
@@ -34,6 +36,7 @@ final class OverlayPanel: NSPanel {
     override func sendEvent(_ event: NSEvent) {
         if event.type == .keyDown, let keyHandler, keyHandler(event) { return }
         if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type) { onMouseDown?() }
+        if [.leftMouseDown, .leftMouseDragged, .leftMouseUp].contains(event.type), let mouseHandler, mouseHandler(event) { return }
         super.sendEvent(event)
     }
 

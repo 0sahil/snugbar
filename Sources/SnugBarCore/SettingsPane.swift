@@ -2,6 +2,7 @@
 public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
     case general
     case sections
+    case layout
     case shortcuts
     case control
     case permissions
@@ -13,6 +14,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .general: return "General"
         case .sections: return "Sections"
+        case .layout: return "Layout"
         case .shortcuts: return "Shortcuts"
         case .control: return "Control"
         case .permissions: return "Permissions"
@@ -24,6 +26,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .general: return "gearshape"
         case .sections: return "rectangle.split.3x1"
+        case .layout: return "square.grid.3x1.below.line.grid.1x2"
         case .shortcuts: return "keyboard"
         case .control: return "terminal"
         case .permissions: return "lock.shield"

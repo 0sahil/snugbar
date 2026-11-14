@@ -114,6 +114,15 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         zen.state = state.zen ? .on : .off
         menu.addItem(zen)
 
+        // Apps seen for the first time (feature 41): each notice shows once; choosing it opens the layout editor.
+        let notices = c.takeNewAppNotices()
+        if !notices.isEmpty {
+            menu.addItem(.separator())
+            for notice in notices {
+                menu.addItem(entry(NewAppNotices.title(for: notice)) { c.openLayoutEditor?() })
+            }
+        }
+
         menu.addItem(.separator())
         menu.addItem(info(c.backendDescription))
         if !c.accessibilityGranted {
@@ -127,6 +136,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        menu.addItem(entry("Edit Layout…") { c.openLayoutEditor?() })
         menu.addItem(entry("Settings…", keyEquivalent: ",") { [openSettings] in openSettings() })
         let login = entry("Launch at Login") { c.setLaunchAtLogin(!c.loginItemEnabled) }
         login.state = c.loginItemEnabled ? .on : .off
@@ -187,6 +197,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var control = ControlSurface(controller: controller)
     private var statusItem: StatusItemController?
     private var settingsWindow: NSWindow?
+    private lazy var layoutEditor = LayoutEditorController(controller: controller) { [weak self] pane in self?.showSettings(pane: pane) }
     private let settingsNavigation = SettingsNavigation(defaults: .standard)
     private var settingsCancellables: Set<AnyCancellable> = []
     private var signalSources: [DispatchSourceSignal] = []
@@ -203,6 +214,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = StatusItemController(controller: controller) { [weak self] in self?.showSettings() }
+        controller.openLayoutEditor = { [weak self] in self?.layoutEditor.show() }
         controller.start()
         control.start()
         handleTerminationSignals()
@@ -243,11 +255,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Launch Services only activates an already running menu bar app when it is opened again (no reopen event), so
     /// an activation with no window open is treated the same way.
     func applicationDidBecomeActive(_ notification: Notification) {
-        guard didFinishLaunching, settingsWindow?.isVisible != true else { return }
+        guard didFinishLaunching, settingsWindow?.isVisible != true, !layoutEditor.isVisible else { return }
         // Opening a snugbar:// link can activate SnugBar too (before or after the link arrives); that isn't a request
         // for the window, so wait a moment to see whether a link came with this activation.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-            guard let self, Date().timeIntervalSince(self.lastLinkAt) > 1.5, self.settingsWindow?.isVisible != true else { return }
+            guard let self, Date().timeIntervalSince(self.lastLinkAt) > 1.5, self.settingsWindow?.isVisible != true,
+                  !self.layoutEditor.isVisible else { return }
             self.showSettings()
         }
     }

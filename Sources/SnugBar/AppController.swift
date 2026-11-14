@@ -19,46 +19,64 @@ final class AppController: ObservableObject {
     @Published private(set) var visibleApps: [String: String] = [:]
     /// Shown apps moved out of the menu bar because they don't fit beside the notch (features 17–18). Runtime only.
     @Published private(set) var overflowHidden: Set<String> = []
+    /// "New: <App> was put in Hidden" entries for the menu (feature 41). Runtime only.
+    @Published var newAppNotices = NewAppNotices()
+    /// A one-line result of the last layout action (editor, restore, reset, import), for the editor and Settings.
+    @Published var layoutMessage: String?
+    /// Bumped when the layout should be read again (an order write settled, a ⌘-drag was adopted).
+    @Published private(set) var layoutRevision = 0
+    /// Opens the layout editor window (set by the app delegate).
+    var openLayoutEditor: (() -> Void)?
 
     let ownBundleID = Bundle.main.bundleIdentifier ?? "app.snugbar.SnugBar"
     /// SnugBar's icon in AppKit screen coordinates, when it is shown. Set by the status item.
     var iconFrame: (() -> NSRect?)?
 
-    private let reader = MenuBarReader()
+    let reader = MenuBarReader()
     private let assessment = AssessmentHider()
     private let divider = OverflowDividerHider()
-    private let orderFile = OrderFileAccess()
+    let orderFile = OrderFileAccess()
     private let hotkeys = HotkeyCenter()
     private lazy var notificationGuard = NotificationCenterGuard(hider: assessment, reader: reader)
     private lazy var monitor = MenuBarEventMonitor(reader: reader)
     private lazy var activator = makeActivator()
-    private let imager = ItemImager(cacheDirectory: ItemImager.defaultCacheDirectory)
+    let imager = ItemImager(cacheDirectory: ItemImager.defaultCacheDirectory)
     private let bar = SnugBarBarController()
     private let search = SearchPanelController()
-    private let store = SettingsStore(url: SettingsStore.defaultURL)
+    let store = SettingsStore(url: SettingsStore.defaultURL)
     private var activeHider: Hider?
     /// Bundle IDs allowed by the current plan, or nil when nothing is hidden.
-    private var currentAllowed: Set<String>?
+    private(set) var currentAllowed: Set<String>?
     private var collapseTimer: Timer?
     private var barRefreshTimer: Timer?
     private var observers: [NSObjectProtocol] = []
     private var saveScheduled = false
     /// Items seen while visible, so hidden apps can be listed and searched.
-    private var catalog = ItemCatalog()
+    var catalog = ItemCatalog()
     /// Widths of shown apps, kept while SnugBar has moved them out.
     private var measurements = FitMeasurements()
     private(set) var lastFit: FitAnalysis?
     private var fitWork: DispatchWorkItem?
     private var captureInFlight = false
+    /// When items may be captured: only once they've settled after the bar changed (SPEC 3.5).
+    var captureGate = CaptureSettleGate()
+    /// After a ⌘-drag in the menu bar ends, until the bar has settled and its order was read.
+    var postDragSettling = false
+    /// A hider update asked for while the bar was frozen (the value: whether it was forced).
+    private var deferredVisibility: Bool?
+    private var deferredSpacerSync = false
     /// An item is being opened (focus, synthetic click, pointer put back); reveal gestures are ignored until shortly
     /// after, so nothing SnugBar does on the user's behalf reopens the SnugBar Bar over the item's menu.
     private var activationsInFlight = 0
     private var gesturesQuietUntil = Date.distantPast
     /// The settings file exists but couldn't be read: only an explicit change by the user may replace it.
-    private var loadFailed = false
+    var loadFailed = false
     /// Apps shown on their own by the `show` command, and when they hide again.
     private var appRevealTimers: [String: Timer] = [:]
-    private lazy var arranger = Arranger(reader: reader, access: orderFile)
+    lazy var arranger = Arranger(reader: reader, access: orderFile)
+    let spacerBar = SpacerBar()
+    let dragWatcher = CommandDragWatcher()
+    lazy var keeper = LayoutKeeper(controller: self)
 
     init() {
         do {
@@ -78,7 +96,7 @@ final class AppController: ObservableObject {
         isPreview = true
     }
 
-    private var isPreview = false
+    private(set) var isPreview = false
 
     // MARK: - Lifecycle
 
@@ -90,8 +108,10 @@ final class AppController: ObservableObject {
         configurePanels()
         observeSystem()
         if preferredHider().backend == .overflowDivider { divider.install() }
+        assessment.onChange = { [weak self] in self?.noteBarChanged() }
         applyVisibility()
         scheduleFitCheck(after: 1.5)
+        startLayout()
     }
 
     /// Stops hiding so the bar is whole when SnugBar quits (the system would also end the hide on exit).
@@ -104,6 +124,8 @@ final class AppController: ObservableObject {
         search.dismiss()
         notificationGuard.stop()
         monitor.stop()
+        keeper.stop()
+        dragWatcher.stop()
         hotkeys.unregisterAll()
         activeHider?.show()
         activeHider = nil
@@ -216,7 +238,13 @@ final class AppController: ObservableObject {
         state.revealInBar = false
         monitor.suppressHoverUntilPointerLeaves()
         applyVisibility()
-        if !on { scheduleFitCheck(after: 1.5) }
+        // Zen shrinks SnugBar's spacers to nothing (they keep their place in the menu bar).
+        syncSpacers()
+        if !on {
+            scheduleFitCheck(after: 1.5)
+            // Puts back anything that lost its place while Zen hid it.
+            keeper.trigger(.zenEnded, after: 1.5)
+        }
     }
 
     // MARK: - SnugBar Bar, search and open by letter (features 16, 20–28)
@@ -283,6 +311,12 @@ final class AppController: ObservableObject {
     /// True while an item is being opened, and briefly after.
     private var isActivating: Bool { activationsInFlight > 0 || Date() < gesturesQuietUntil }
 
+    /// The menu bar doesn't show the plan right now (an item is being opened, or the hide is lifted for Notification
+    /// Center): layout checks wait.
+    var layoutIsBusy: Bool { isActivating || assessment.isFocusing || assessment.isSuspended }
+
+    func bumpLayoutRevision() { layoutRevision &+= 1 }
+
     /// Every item SnugBar knows (live, remembered, and placeholders for running apps), without SnugBar's own.
     func allItems() -> [MenuBarItem] {
         let live = Permissions.accessibility ? snapshotItems() : []
@@ -321,6 +355,9 @@ final class AppController: ObservableObject {
             self.collapse()
         }
         bar.ownIconFrame = { [weak self] in self?.iconFrame?() }
+        bar.onDrop = { [weak self] request in self?.barDropped(request) }
+        // No reconcile while a tile is dragged in the bar, as in the layout editor.
+        bar.onDragging = { [weak self] dragging in self?.keeper.editorDragging = dragging }
         search.ownIconFrame = { [weak self] in self?.iconFrame?() }
         bar.onClickOutside = { [weak self] point in
             guard let self else { return }
@@ -341,10 +378,12 @@ final class AppController: ObservableObject {
     }
 
     private func barGroups(letters: Bool) -> [SnugBarBarController.Group] {
-        let groups = BarListing.groups(
-            items: allItems(), sections: settings.sections, state: state, overflowHidden: effectiveOverflow, excluding: [ownBundleID]
-        )
         let positions = try? orderFile.readPositions()
+        // Hidden items in the order they take when their section is expanded.
+        let items = SectionOrder.arranged(allItems(), sections: settings.sections, layout: settings.layout, positions: positions)
+        let groups = BarListing.groups(
+            items: items, sections: settings.sections, state: state, overflowHidden: effectiveOverflow, excluding: [ownBundleID]
+        )
         var images: [ItemID: ItemImager.ItemImage] = [:]
         for item in groups.flatMap(\.items) { images[item.id] = imager.image(for: item, orderPositions: positions) }
         // An app's items without a picture of their own would all show its icon: they share one tile.
@@ -354,10 +393,29 @@ final class AppController: ObservableObject {
             })
         }
         let keys = letters ? LetterAssigner.assign(tiled.flatMap { $0.1.map(\.item) }) : [:]
+        // Tiles can be dragged to reorder only with the order file, which is what places hidden items (SPEC 3.4).
+        let swapped = state.swapped
         return tiled.map { kind, tiles in
             SnugBarBarController.Group(kind: kind, entries: tiles.map { tile in
-                .init(tile: tile, image: NSImage.forBarItem(images[tile.id]), key: keys[tile.id])
-            })
+                .init(tile: tile, image: NSImage.forBarItem(images[tile.id]), key: keys[tile.id],
+                      canDrag: BarDrag.canDrag(tile, in: kind, swapped: swapped, positions: positions))
+            }, section: BarDrag.section(of: kind, swapped: swapped))
+        }
+    }
+
+    /// A tile dropped in the SnugBar Bar: written like a drop in the layout editor (desired order, order file through
+    /// the keeper), then the rows show the new order at once from the desired layout. Pictures stay cached: the order
+    /// write marks the bar as changing, so nothing is captured until items settle.
+    private func barDropped(_ request: SnugBarBarController.DropRequest) {
+        let positions = try? orderFile.readPositions()
+        switch BarDrag.outcome(dragging: request.tile, from: request.from, onto: request.onto, gap: request.gap,
+                               row: request.row, positions: positions) {
+        case let .reorder(section, order, appsIn):
+            editorReorder(section, order: order, appsIn: appsIn)
+            noteBarChanged()
+            if bar.isVisible, !bar.isShowingKeys { bar.update(groups: barGroups(letters: false)) }
+        case .none, .notAllowed:
+            break
         }
     }
 
@@ -372,29 +430,102 @@ final class AppController: ObservableObject {
         barRefreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] timer in
             MainActor.assumeIsolated {
                 guard let self, self.bar.isVisible, !self.bar.isShowingKeys else { timer.invalidate(); return }
+                // Not mid-drag: the rows stay put until the drop.
+                guard !self.bar.isDragging else { return }
                 self.bar.update(groups: self.barGroups(letters: false))
             }
         }
     }
 
+    /// How long a capture waits at most for items to settle; items still moving after that keep their old pictures.
+    nonisolated static let captureSettleTimeout: TimeInterval = 3
+
     /// Captures pictures of the items on screen now (needs Screen Recording). Hidden items can't be captured, so
     /// this runs when items are visible: after a reveal in the menu bar, and before apps move to "Didn't fit".
-    private func captureVisibleItems(then done: (() -> Void)? = nil) {
-        guard Permissions.screenRecording, Permissions.accessibility, !captureInFlight,
+    ///
+    /// An item is captured only once it has settled (`CaptureSettleGate`): its frame was the same on two reads at
+    /// least 0.3 s apart and the bar last changed at least 0.8 s ago. Until then it keeps its last good picture; the
+    /// frames are read again until every item settled or `captureSettleTimeout` passed. Nothing is captured while the
+    /// user ⌘-drags items.
+    func captureVisibleItems(then done: (() -> Void)? = nil) {
+        guard Permissions.screenRecording, Permissions.accessibility, !captureInFlight, !barIsFrozen,
               !assessment.isFocusing, !assessment.isSuspended
         else { done?(); return }
-        let onScreen = currentAllowed
-        let positions = try? orderFile.readPositions()
-        let items = reader.snapshot(orderPositions: positions).items.filter { item in
-            item.isAppleItem || onScreen?.contains(item.ownerBundleID) ?? true
-        }
         captureInFlight = true
         Task { @MainActor in
-            _ = try? await self.imager.refresh(items) { [reader = self.reader] in reader.currentFrames(orderPositions: positions) }
+            var tried = Set<ItemID>()
+            let deadline = Date().addingTimeInterval(Self.captureSettleTimeout)
+            while !self.barIsFrozen, !self.assessment.isFocusing, !self.assessment.isSuspended {
+                let positions = try? self.orderFile.readPositions()
+                let items = self.capturableItems(positions: positions)
+                let now = Date()
+                self.captureGate.record(Self.gateFrames(items), at: now)
+                let (ready, readAgainAt) = self.captureGate.split(items.map(\.id.rawValue), at: now)
+                let readyKeys = Set(ready)
+                let batch = items.filter { readyKeys.contains($0.id.rawValue) && !tried.contains($0.id) }
+                if !batch.isEmpty {
+                    tried.formUnion(batch.map(\.id))
+                    _ = try? await self.imager.refresh(batch) { [reader = self.reader] in reader.currentFrames(orderPositions: positions) }
+                }
+                guard let next = readAgainAt, next < deadline else { break }
+                try? await Task.sleep(nanoseconds: UInt64(max(next.timeIntervalSinceNow, 0.05) * 1_000_000_000))
+            }
             self.captureInFlight = false
             done?()
         }
     }
+
+    /// Items on screen in the menu bar now (Apple's and allowed apps'), not in macOS's overflow.
+    private func capturableItems(positions: [String: Double]?) -> [MenuBarItem] {
+        let onScreen = currentAllowed
+        return reader.snapshot(orderPositions: positions).items.filter { item in
+            !item.isOverflowed && item.frame.width > 0 && (item.isAppleItem || onScreen?.contains(item.ownerBundleID) ?? true)
+        }
+    }
+
+    private static func gateFrames(_ items: [MenuBarItem]) -> [String: Rect] {
+        Dictionary(items.map { ($0.id.rawValue, $0.frame) }, uniquingKeysWith: { a, _ in a })
+    }
+
+    /// Something SnugBar did is moving items now (allow-list, order file, spacers, a ⌘-drag ended).
+    func noteBarChanged() {
+        captureGate.noteBarChange(at: Date())
+    }
+
+    /// Reads the menu bar until every item on screen has settled (same rule as captures), or `timeout` passes.
+    func waitForBarToSettle(timeout: TimeInterval = captureSettleTimeout) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while true {
+            let items = capturableItems(positions: try? orderFile.readPositions())
+            let now = Date()
+            captureGate.record(Self.gateFrames(items), at: now)
+            guard let next = captureGate.split(items.map(\.id.rawValue), at: now).readAgainAt, next < deadline else { return }
+            try? await Task.sleep(nanoseconds: UInt64(max(next.timeIntervalSinceNow, 0.05) * 1_000_000_000))
+            if Task.isCancelled { return }
+        }
+    }
+
+    // MARK: - ⌘-drag in the menu bar
+
+    /// The user is ⌘-dragging items in the menu bar, or it hasn't settled since: SnugBar changes nothing in the bar
+    /// (no hider update, no spacer change, no order write) and captures nothing. Hider and spacer updates asked for
+    /// meanwhile run once it is over (`barUnfrozen`).
+    var barIsFrozen: Bool { !isPreview && (dragWatcher.userIsDragging || postDragSettling) }
+
+    /// The drag is over and the bar settled: catch up on what was held back.
+    func barUnfrozen() {
+        guard !barIsFrozen else { return }
+        if let force = deferredVisibility {
+            deferredVisibility = nil
+            applyVisibility(force: force)
+        }
+        if deferredSpacerSync {
+            deferredSpacerSync = false
+            syncSpacers()
+        }
+    }
+
+    func deferSpacerSync() { deferredSpacerSync = true }
 
     // MARK: - Fit beside the notch (features 17–18)
 
@@ -421,9 +552,10 @@ final class AppController: ObservableObject {
             }
             return
         }
-        // Measure only the collapsed menu bar, and not while an item is being opened or the hide is lifted.
+        // Measure only the collapsed menu bar, and not while an item is being opened, the hide is lifted or the user
+        // ⌘-drags items.
         if state.menuBarReveal != .collapsed { return }
-        if assessment.isFocusing || assessment.isSuspended {
+        if assessment.isFocusing || assessment.isSuspended || barIsFrozen {
             scheduleFitCheck(after: 2)
             return
         }
@@ -455,7 +587,7 @@ final class AppController: ObservableObject {
     }
 
     /// One snapshot, also used to remember items and widths of apps that are on screen.
-    private func snapshotItems() -> [MenuBarItem] {
+    func snapshotItems() -> [MenuBarItem] {
         let items = reader.snapshot(orderPositions: try? orderFile.readPositions()).items
         // While an item is being opened or the hide is lifted, other apps' visibility doesn't match the plan.
         guard !assessment.isFocusing, !assessment.isSuspended else { return items }
@@ -536,6 +668,7 @@ final class AppController: ObservableObject {
         case let .after(anchor): p = .after(anchor)
         }
         let result = try await arranger.move(item, p)
+        noteUserOrder(item, placement)
         return result.method == .orderFile ? .orderFile : .drag
     }
 
@@ -564,6 +697,7 @@ final class AppController: ObservableObject {
         }
         if next.sections != before.sections || next.hider != before.hider { applyVisibility() }
         if next.showIcon != before.showIcon { NotificationCenter.default.post(name: .snugBarIconVisibilityChanged, object: nil) }
+        if next.layout.spacers != before.layout.spacers { syncSpacers() }
         if next.revealIn != before.revealIn, state.reveal != .collapsed { collapse() }
         if next.moveItemsThatDontFit != before.moveItemsThatDontFit {
             if next.moveItemsThatDontFit {
@@ -580,6 +714,7 @@ final class AppController: ObservableObject {
     /// Moves one or more apps at once: one settings change, so one save and one hider update.
     func setSection(_ section: Section, for bundleIDs: [String]) {
         update { $0.sections.set(section, forBundleIDs: bundleIDs) }
+        newAppNotices.appsMoved(bundleIDs)
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
@@ -653,7 +788,7 @@ final class AppController: ObservableObject {
     }
 
     /// Bundle IDs that may own menu bar items now: running apps that can show UI, plus every known app.
-    private func candidateBundleIDs() -> Set<String> {
+    func candidateBundleIDs() -> Set<String> {
         var result = Set(settings.knownApps.keys)
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy != .prohibited {
             if let id = app.bundleIdentifier { result.insert(id) }
@@ -662,7 +797,12 @@ final class AppController: ObservableObject {
     }
 
     /// - Parameter force: re-apply even when the allow-list hasn't changed (after wake, display or app changes).
-    private func applyVisibility(force: Bool = false) {
+    func applyVisibility(force: Bool = false) {
+        // Not while the user ⌘-drags items: the bar would change under the pointer. Done once the drag settles.
+        if barIsFrozen {
+            deferredVisibility = (deferredVisibility ?? false) || force
+            return
+        }
         let hider = preferredHider()
         if !hider.supportsAllowList {
             // The divider hides by position: a collapsed menu bar hides, a reveal in the menu bar shows.
@@ -697,6 +837,7 @@ final class AppController: ObservableObject {
 
     private func applyDivider(hide: Bool) {
         notificationGuard.stop()
+        noteBarChanged()
         if hide {
             do {
                 try divider.hide(allowing: [])
@@ -744,6 +885,11 @@ final class AppController: ObservableObject {
     }
 
     private func autoCollapseTimerFired() {
+        // A collapse would change the bar under a ⌘-drag, or close the SnugBar Bar under a drag in it.
+        if barIsFrozen || bar.isDragging {
+            scheduleAutoCollapse(after: 1)
+            return
+        }
         switch AutoCollapsePolicy.onTimer(
             state: state, settings: settings.autoCollapse,
             menuOpen: revealedMenuOpen(), pointerInMenuBar: MenuBarEventMonitor.pointerInMenuBar || bar.containsPointer
@@ -784,6 +930,7 @@ final class AppController: ObservableObject {
             guard let self else { return }
             // Let the click land first: if it opened or closed a menu, the window list reflects it a moment later.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                if self.bar.isDragging { return }
                 if AutoCollapsePolicy.onClickOutside(state: self.state, settings: self.settings.autoCollapse, menuOpen: self.revealedMenuOpen()) {
                     self.collapse()
                 }
@@ -805,12 +952,17 @@ final class AppController: ObservableObject {
             let bundle = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
             MainActor.assumeIsolated { self?.appActivated(bundle) }
         })
-        observers.append(ws.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] _ in
+        observers.append(ws.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] note in
+            let bundle = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
             // A new app under the default section must be named in the allow-list to be let through.
             MainActor.assumeIsolated {
                 self?.reapplyIfHiding()
                 self?.scheduleFitCheck(after: 2)
+                if let bundle { self?.keeper.appLaunched(bundle) }
             }
+        })
+        observers.append(ws.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.keeper.trigger(.spaceChanged) }
         })
         observers.append(ws.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [weak self] note in
             let bundle = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
@@ -820,6 +972,7 @@ final class AppController: ObservableObject {
             MainActor.assumeIsolated {
                 self?.reapplyIfHiding()
                 self?.scheduleFitCheck(after: 2)
+                self?.keeper.trigger(.wake, after: 2)
             }
         })
         observers.append(NotificationCenter.default.addObserver(
@@ -828,6 +981,7 @@ final class AppController: ObservableObject {
             MainActor.assumeIsolated {
                 self?.reapplyIfHiding()
                 self?.scheduleFitCheck(after: 1)
+                self?.keeper.trigger(.displayChanged, after: 1.5)
             }
         })
         observers.append(NotificationCenter.default.addObserver(
@@ -857,7 +1011,7 @@ final class AppController: ObservableObject {
         scheduleFitCheck(after: 1)
     }
 
-    private func reapplyIfHiding() {
+    func reapplyIfHiding() {
         guard activeHider != nil else { return }
         applyVisibility(force: true)
     }
@@ -871,6 +1025,7 @@ final class AppController: ObservableObject {
             visible[item.ownerBundleID] = item.appName
         }
         visibleApps = visible
+        noteNewApps(items, seen: visible)
         var next = settings
         if next.noteApps(visible.map { (bundleID: $0.key, name: $0.value) }) {
             settings = next
@@ -878,7 +1033,7 @@ final class AppController: ObservableObject {
         }
     }
 
-    private func scheduleSave() {
+    func scheduleSave() {
         guard !saveScheduled, !isPreview else { return }
         saveScheduled = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in

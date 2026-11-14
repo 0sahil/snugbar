@@ -29,6 +29,9 @@ public final class AssessmentHider: Hider {
 
     public var isAvailable: Bool { api != nil }
 
+    /// Called after the assertion is activated, replaced or dropped: items are about to move.
+    public var onChange: (() -> Void)?
+
     /// The bundle IDs currently allowed (base plus temporary, or only the focused app while focusing).
     public var allowedBundleIDs: Set<String> { focusAllowed ?? baseAllowed.union(temporarilyAllowed) }
 
@@ -126,11 +129,14 @@ public final class AssessmentHider: Hider {
         }
         // Replace rather than stack: drop the old assertion once the new one is in place.
         if let previous { api.invalidate(previous) }
+        onChange?()
     }
 
     private func invalidate() {
-        if let assertion, let api { api.invalidate(assertion) }
-        assertion = nil
+        guard let assertion else { return }
+        api?.invalidate(assertion)
+        self.assertion = nil
+        onChange?()
     }
 
     // MARK: - Runtime binding

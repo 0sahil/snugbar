@@ -64,7 +64,9 @@ public final class ItemImager {
     /// Captures the strip and refreshes the cache for every visible item. Returns the IDs captured.
     ///
     /// A picture is only kept when `MenuBarGeometry.isCleanCapture` accepts it (the item didn't move during the
-    /// capture, is fully on screen and clear of the notch); otherwise the item keeps its earlier picture.
+    /// capture, is fully on screen and clear of the notch) and `CaptureValidation` does (as wide as the item now, not
+    /// blank); otherwise the item keeps its earlier picture. Callers decide when items have settled enough to be
+    /// captured at all (`CaptureSettleGate`).
     /// - Parameter framesAfterCapture: reads the items' frames again once the capture is done. Without it the frames
     ///   are assumed unchanged.
     @discardableResult
@@ -122,7 +124,13 @@ public final class ItemImager {
                 .integral
                 .intersection(CGRect(x: 0, y: 0, width: strip.width, height: strip.height))
             guard !crop.isEmpty, let image = strip.cropping(to: crop) else { continue }
-            store(GlyphImage.keyed(image), for: item.id)
+            let keyed = GlyphImage.keyed(image)
+            // A picture replaces the cached one only when it is the item: as wide as the item is now and not just
+            // the bar's background. Otherwise the last good picture stays.
+            guard CaptureValidation.accepts(
+                capturedWidth: Double(crop.width / pxPerPt), currentWidth: frameAfter.map { Double($0.width) }, isBlank: keyed == nil
+            ) else { continue }
+            store(keyed, for: item.id)
             captured.append(item.id)
             if let url = diskURL(for: item.id), let png = image.pngData() {
                 try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

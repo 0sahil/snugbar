@@ -89,7 +89,7 @@ public final class Arranger {
                 let after = reader.snapshot(orderPositions: try? access.readPositions()).items.map(\.id.rawValue)
                 return Result(
                     method: .orderFile, fallbackReason: nil, changes: plan.changes, renumbered: plan.renumbered,
-                    backup: backup.lastPathComponent, pointerBefore: PointerPosition(pointerBefore), pointerDuring: nil,
+                    backup: backup?.lastPathComponent, pointerBefore: PointerPosition(pointerBefore), pointerDuring: nil,
                     pointerAfter: PointerPosition(SyntheticInput.pointer), orderBefore: orderBefore, orderAfter: after,
                     verified: Self.isPlaced(item.id.rawValue, placement, in: after)
                 )
@@ -127,6 +127,41 @@ public final class Arranger {
             pointerAfter: PointerPosition(SyntheticInput.pointer), orderBefore: orderBefore, orderAfter: afterIDs,
             verified: Self.isPlaced(item.id.rawValue, placement, in: afterIDs)
         )
+    }
+
+    /// Writes planned order-file values (a whole layout) in one go, after a backup. Never moves the pointer.
+    /// - Returns: the backup's URL.
+    @discardableResult
+    public func writeOrder(_ changes: [String: Double]) throws -> URL? {
+        guard !changes.isEmpty else { return nil }
+        return try access.write(changes: changes)
+    }
+
+    /// Applies planned moves one by one with ⌘-drag (the fallback without order-file access). Only for explicit user
+    /// actions: the pointer moves for each. Items are looked up by key in a fresh snapshot before each move;
+    /// `item(for:)` resolves keys the reader doesn't use (spacers). Moves whose items aren't in the menu bar are
+    /// skipped. Returns how many moves were made.
+    public func dragMoves(_ moves: [OrderPlanner.Move], item: (String, MenuBarSnapshot) -> MenuBarItem?) async -> (done: Int, failed: [String]) {
+        var done = 0
+        var failed: [String] = []
+        let saved = forceDrag
+        forceDrag = true
+        defer { forceDrag = saved }
+        for move in moves {
+            let snapshot = reader.snapshot(orderPositions: nil)
+            guard let moving = item(move.key, snapshot), let anchor = item(move.placement.anchor, snapshot) else {
+                failed.append(move.key)
+                continue
+            }
+            let placement: Placement = move.after != nil ? .after(anchor) : .before(anchor)
+            do {
+                _ = try await self.move(moving, placement)
+                done += 1
+            } catch {
+                failed.append(move.key)
+            }
+        }
+        return (done, failed)
     }
 
     static func isPlaced(_ key: String, _ placement: Placement, in order: [String]) -> Bool {

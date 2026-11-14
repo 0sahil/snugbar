@@ -6,6 +6,8 @@ final class BulkSectionMoveTests: XCTestCase {
         XCTAssertEqual(BulkSectionMove.title(count: 0), "Move To…")
         XCTAssertEqual(BulkSectionMove.title(count: 1), "Move To…")
         XCTAssertEqual(BulkSectionMove.title(count: 3), "Move 3 Apps To…")
+        XCTAssertEqual(BulkSectionMove.submenuTitle(count: 1), "Move To")
+        XCTAssertEqual(BulkSectionMove.submenuTitle(count: 3), "Move 3 Apps To")
     }
 
     func testTargetsFollowListOrderAndDropUnlisted() {

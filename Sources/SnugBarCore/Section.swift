@@ -5,6 +5,15 @@ public enum Section: String, Codable, CaseIterable, Sendable {
     case shown
     case hidden
     case alwaysHidden
+
+    /// The name shown in SnugBar's UI ("Always Hidden").
+    public var title: String {
+        switch self {
+        case .shown: return "Shown"
+        case .hidden: return "Hidden"
+        case .alwaysHidden: return "Always Hidden"
+        }
+    }
 }
 
 /// Section assignment per app (keyed by bundle ID), with a default for apps not listed.

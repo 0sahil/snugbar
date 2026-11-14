@@ -47,6 +47,7 @@ struct SettingsView: View {
         switch pane {
         case .general: GeneralSettings(controller: controller)
         case .sections: SectionsSettings(controller: controller)
+        case .layout: LayoutSettings(controller: controller)
         case .shortcuts: ShortcutSettings(controller: controller)
         case .control: ControlSettings(controller: controller, control: control)
         case .permissions: PermissionSettings(controller: controller)
@@ -181,16 +182,50 @@ private struct GeneralSettings: View {
                 }
             }
 
-            Section("Settings file") {
+            Section {
                 HStack {
                     Text(SettingsStore.defaultURL.path(percentEncoded: false)).font(.callout).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                     Spacer()
                     Button("Show in Finder") { controller.revealSettingsFile() }
                 }
+                HStack {
+                    Button("Export Settings…", action: exportSettings)
+                    Button("Import Settings…", action: importSettings)
+                }
+            } header: {
+                Text("Settings file")
+            } footer: {
+                Text("Importing replaces every setting and saves a backup of the layout first. The access token and Menu Bar folder access are not part of the file.")
+                    .font(.callout).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func exportSettings() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "SnugBar Settings.json"
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try controller.exportSettings(to: url)
+        } catch {
+            showAlert("The settings couldn’t be exported.", error.localizedDescription)
+        }
+    }
+
+    private func importSettings() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.prompt = "Import"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if let problem = controller.importSettings(from: url) {
+            showAlert("The settings couldn’t be imported.", problem)
+        }
     }
 
     private var noIconHint: String {
@@ -199,6 +234,124 @@ private struct GeneralSettings: View {
         if controller.settings.reveal.clickEmptyBar { ways.append("click an empty part of the menu bar") }
         let how = ways.isEmpty ? "Set a shortcut first, or you can only reveal items from this window." : "To show hidden items, \(ways.joined(separator: " or "))."
         return how + " Open SnugBar again from Applications to get back here."
+    }
+}
+
+@MainActor
+private func showAlert(_ title: String, _ detail: String) {
+    let alert = NSAlert()
+    alert.messageText = title
+    alert.informativeText = detail
+    alert.runModal()
+}
+
+// MARK: - Layout
+
+/// The layout editor, backups (feature 81) and reset.
+private struct LayoutSettings: View {
+    @ObservedObject var controller: AppController
+    @State private var backups: [LayoutBackupStore.Entry] = []
+    @State private var selection: LayoutBackupStore.Entry.ID?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Arrange items, move apps between sections and add spacers in the layout editor.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button("Edit Layout…") { controller.openLayoutEditor?() }
+            }
+
+            Text("Backups").font(.headline).padding(.top, 6)
+            Table(backups, selection: $selection) {
+                TableColumn("Date") { Text($0.createdAt.formatted(date: .abbreviated, time: .shortened)) }
+                    .width(min: 140, ideal: 170)
+                TableColumn("macOS Build") { Text($0.systemBuild ?? "–") }
+                    .width(min: 80, ideal: 90)
+                TableColumn("Items") { Text("\($0.itemCount)").monospacedDigit() }
+                    .width(min: 40, ideal: 50)
+                TableColumn("Taken Before") { Text(Self.reasonTitle($0.reason)) }
+            }
+            .frame(minHeight: 140, maxHeight: .infinity)
+            .overlay {
+                if backups.isEmpty {
+                    Text("No backups yet. SnugBar saves one before every change to the item order, and before a reset, restore or import.")
+                        .foregroundStyle(.secondary).multilineTextAlignment(.center).padding()
+                }
+            }
+            .contextMenu(forSelectionType: LayoutBackupStore.Entry.ID.self) { ids in
+                if let entry = backups.first(where: { ids.contains($0.id) }) {
+                    Button("Restore") { restore(entry) }
+                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([entry.url]) }
+                }
+            }
+
+            HStack {
+                Button("Restore") { if let entry = selectedEntry { restore(entry) } }
+                    .disabled(selectedEntry == nil)
+                Button("Show in Finder") {
+                    if let entry = selectedEntry { NSWorkspace.shared.activateFileViewerSelecting([entry.url]) }
+                }
+                .disabled(selectedEntry == nil)
+                Spacer()
+                Button("Reset Layout…", action: reset)
+            }
+            if let message = controller.layoutMessage {
+                Text(message).font(.callout)
+            }
+            Text("SnugBar keeps the last \(LayoutBackupPolicy.keepCount) backups. Restoring saves a backup of the current layout first.")
+                .font(.callout).foregroundStyle(.secondary)
+        }
+        .padding(20)
+        .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear(perform: reload)
+        .onChange(of: controller.layoutRevision) { _, _ in reload() }
+    }
+
+    private var selectedEntry: LayoutBackupStore.Entry? {
+        backups.first { $0.id == selection }
+    }
+
+    private func reload() {
+        backups = controller.layoutBackups()
+    }
+
+    static func reasonTitle(_ reason: String?) -> String {
+        switch reason {
+        case "order": return "Reordering"
+        case "reset": return "Reset"
+        case "restore": return "Restore"
+        case "import": return "Import"
+        case "macOS update": return "macOS update"
+        case let other?: return other
+        case nil: return "Reordering"
+        }
+    }
+
+    private func restore(_ entry: LayoutBackupStore.Entry) {
+        let alert = NSAlert()
+        alert.messageText = "Restore the layout from \(entry.createdAt.formatted(date: .abbreviated, time: .shortened))?"
+        alert.informativeText = entry.hasLayout
+            ? "Sections, the order of Shown items and spacers are restored. Item positions are restored too when SnugBar has Menu Bar folder access. A backup of the current layout is saved first."
+            : "This backup only has item positions; they are restored when SnugBar has Menu Bar folder access. A backup of the current layout is saved first."
+        alert.addButton(withTitle: "Restore")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        controller.restoreBackup(entry)
+        reload()
+    }
+
+    private func reset() {
+        let alert = NSAlert()
+        alert.messageText = "Reset the layout?"
+        alert.informativeText = "Every app goes back to \(controller.settings.sections.defaultSection.title), the saved order is cleared and spacers are removed. A backup is saved first, so you can restore it from this list."
+        alert.addButton(withTitle: "Reset")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        controller.resetLayout()
+        reload()
     }
 }
 
@@ -253,6 +406,7 @@ private struct SectionsSettings: View {
                     .fixedSize()
                     .disabled(selected.isEmpty)
                 Spacer()
+                Button("Edit Layout…") { controller.openLayoutEditor?() }
             }
             Text("Select several apps with ⌘-click or ⇧-click to move them together.")
                 .font(.callout).foregroundStyle(.secondary)
@@ -305,16 +459,6 @@ private struct AppIcon: View {
                 .resizable()
         } else {
             Image(systemName: "app.dashed").resizable().foregroundStyle(.secondary)
-        }
-    }
-}
-
-extension SnugBarCore.Section {
-    var title: String {
-        switch self {
-        case .shown: return "Shown"
-        case .hidden: return "Hidden"
-        case .alwaysHidden: return "Always Hidden"
         }
     }
 }

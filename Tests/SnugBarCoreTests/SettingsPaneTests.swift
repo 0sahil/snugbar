@@ -3,7 +3,7 @@ import XCTest
 
 final class SettingsPaneTests: XCTestCase {
     func testSidebarOrder() {
-        XCTAssertEqual(SettingsPane.allCases.map(\.title), ["General", "Sections", "Shortcuts", "Control", "Permissions"])
+        XCTAssertEqual(SettingsPane.allCases.map(\.title), ["General", "Sections", "Layout", "Shortcuts", "Control", "Permissions"])
     }
 
     func testLookupByNameOrTitle() {
