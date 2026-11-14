@@ -40,6 +40,10 @@ public struct Settings: Codable, Equatable, Sendable {
     public var moveItemsThatDontFit: Bool
     /// Items opened from the SnugBar Bar, search or by letter, most recent first (feature 28).
     public var recentItems: [ItemID]
+    /// The local HTTP server for the CLI and MCP (features 70–73).
+    public var controlServer: ControlServerSettings
+    /// `snugbar://` links from other apps (feature 76).
+    public var urlScheme: URLSchemeSettings
 
     public init(
         schemaVersion: Int = Settings.currentSchemaVersion,
@@ -52,7 +56,9 @@ public struct Settings: Codable, Equatable, Sendable {
         knownApps: [String: String] = [:],
         revealIn: RevealDestination = .snugBarBar,
         moveItemsThatDontFit: Bool = true,
-        recentItems: [ItemID] = []
+        recentItems: [ItemID] = [],
+        controlServer: ControlServerSettings = ControlServerSettings(),
+        urlScheme: URLSchemeSettings = URLSchemeSettings()
     ) {
         self.schemaVersion = schemaVersion
         self.sections = sections
@@ -65,6 +71,8 @@ public struct Settings: Codable, Equatable, Sendable {
         self.revealIn = revealIn
         self.moveItemsThatDontFit = moveItemsThatDontFit
         self.recentItems = recentItems
+        self.controlServer = controlServer
+        self.urlScheme = urlScheme
     }
 
     /// A fresh install: every third-party app hidden, no hotkeys, no personal data.
@@ -73,6 +81,7 @@ public struct Settings: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case schemaVersion, sections, hider, showIcon, autoCollapse, reveal, hotkeys, knownApps
         case revealIn, moveItemsThatDontFit, recentItems
+        case controlServer, urlScheme
     }
 
     public init(from decoder: Decoder) throws {
@@ -88,6 +97,8 @@ public struct Settings: Codable, Equatable, Sendable {
         revealIn = try c.decodeIfPresent(RevealDestination.self, forKey: .revealIn) ?? .snugBarBar
         moveItemsThatDontFit = try c.decodeIfPresent(Bool.self, forKey: .moveItemsThatDontFit) ?? true
         recentItems = try c.decodeIfPresent([ItemID].self, forKey: .recentItems) ?? []
+        controlServer = try c.decodeIfPresent(ControlServerSettings.self, forKey: .controlServer) ?? ControlServerSettings()
+        urlScheme = try c.decodeIfPresent(URLSchemeSettings.self, forKey: .urlScheme) ?? URLSchemeSettings()
     }
 
     /// Records that an item was opened: it moves to the front of `recentItems`, which keeps `RecentItems.limit`.

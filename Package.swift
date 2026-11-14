@@ -12,6 +12,9 @@ let package = Package(
         .library(name: "SnugBarCore", targets: ["SnugBarCore"]),
         .library(name: "SnugBarEngine", targets: ["SnugBarEngine"]),
         .executable(name: "SnugBar", targets: ["SnugBar"]),
+        // The `snugbar` command line. Built as `snugbar-cli` because `snugbar` and `SnugBar` are the same name on a
+        // case-insensitive volume; build-app.sh puts it in the app as Contents/Helpers/snugbar.
+        .executable(name: "snugbar-cli", targets: ["SnugBarCLI"]),
     ],
     targets: [
         .target(
@@ -31,6 +34,10 @@ let package = Package(
         .executableTarget(
             name: "SnugBar",
             dependencies: ["SnugBarCore", "SnugBarEngine"]
+        ),
+        .executableTarget(
+            name: "SnugBarCLI",
+            dependencies: ["SnugBarCore"]
         ),
         .testTarget(
             name: "SnugBarCoreTests",

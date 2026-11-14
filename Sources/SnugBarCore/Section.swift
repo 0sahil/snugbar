@@ -31,6 +31,11 @@ public struct AppSectionMap: Codable, Equatable, Sendable {
         apps[bundleID] = section
     }
 
+    /// Puts several apps in one section.
+    public mutating func set(_ section: Section, forBundleIDs bundleIDs: some Sequence<String>) {
+        for bundleID in bundleIDs { apps[bundleID] = section }
+    }
+
     /// Bundle IDs explicitly assigned to a section.
     public func bundleIDs(in section: Section) -> Set<String> {
         Set(apps.filter { $0.value == section }.keys)

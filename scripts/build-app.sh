@@ -27,12 +27,16 @@ APP="$ROOT/build/SnugBar.app"
 
 echo "==> swift build -c release"
 swift build -c release --product SnugBar
+swift build -c release --product snugbar-cli
 BIN_DIR="$(swift build -c release --show-bin-path)"
 
 echo "==> assembling $APP"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers"
 cp "$BIN_DIR/SnugBar" "$APP/Contents/MacOS/SnugBar"
+# The command-line tool. Not in Contents/MacOS: on a case-insensitive volume "snugbar" there is the app's own binary
+# (which, when run under that name, also acts as the command-line tool).
+cp "$BIN_DIR/snugbar-cli" "$APP/Contents/Helpers/snugbar"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -67,17 +71,32 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <true/>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2026 0sahil. MIT License.</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>${BUNDLE_ID}</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>snugbar</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>
 PLIST
 plutil -lint "$APP/Contents/Info.plist"
 
 IDENTITY="${SNUGBAR_SIGN_IDENTITY:-}"
+# Nested code first, then the bundle.
+HELPER="$APP/Contents/Helpers/snugbar"
 if [[ -n "$IDENTITY" ]]; then
     echo "==> signing with '$IDENTITY'"
+    codesign --force --options runtime --timestamp --identifier "${BUNDLE_ID}.cli" --sign "$IDENTITY" "$HELPER"
     codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
 else
     echo "==> signing ad-hoc"
+    codesign --force --identifier "${BUNDLE_ID}.cli" --sign - "$HELPER"
     codesign --force --sign - "$APP"
 fi
 codesign --verify --strict "$APP"

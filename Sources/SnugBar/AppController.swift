@@ -56,6 +56,9 @@ final class AppController: ObservableObject {
     private var gesturesQuietUntil = Date.distantPast
     /// The settings file exists but couldn't be read: only an explicit change by the user may replace it.
     private var loadFailed = false
+    /// Apps shown on their own by the `show` command, and when they hide again.
+    private var appRevealTimers: [String: Timer] = [:]
+    private lazy var arranger = Arranger(reader: reader, access: orderFile)
 
     init() {
         do {
@@ -67,6 +70,15 @@ final class AppController: ObservableObject {
         }
         orderFileGranted = orderFile.status == .granted
     }
+
+    /// A controller that only backs an offscreen Settings render (`--debug settings-snapshot`): it uses `settings`,
+    /// never reads or writes the settings file or the order file, and is never started.
+    init(preview settings: Settings) {
+        self.settings = settings
+        isPreview = true
+    }
+
+    private var isPreview = false
 
     // MARK: - Lifecycle
 
@@ -86,6 +98,8 @@ final class AppController: ObservableObject {
     func stop() {
         collapseTimer?.invalidate()
         barRefreshTimer?.invalidate()
+        appRevealTimers.values.forEach { $0.invalidate() }
+        appRevealTimers = [:]
         bar.dismiss()
         search.dismiss()
         notificationGuard.stop()
@@ -230,19 +244,9 @@ final class AppController: ObservableObject {
     /// closed: the item's menu must be the only thing on screen.
     func activate(_ item: MenuBarItem) {
         guard !state.zen else { return }
-        bar.dismiss()
-        search.dismiss()
-        barRefreshTimer?.invalidate()
-        activationsInFlight += 1
-        if state.revealInBar && state.reveal != .collapsed { collapse() }
-        update { $0.noteRecent(item.id) }
-        let positions = try? orderFile.readPositions()
+        let positions = prepareActivation(item)
         Task { @MainActor in
-            defer {
-                self.activationsInFlight -= 1
-                // The synthetic click's mouse-up and the pointer warp land a moment later.
-                self.gesturesQuietUntil = Date().addingTimeInterval(0.6)
-            }
+            defer { self.finishActivation() }
             do {
                 _ = try await self.activator.activate(item, orderPositions: positions)
             } catch {
@@ -250,6 +254,30 @@ final class AppController: ObservableObject {
                 NSSound.beep()
             }
         }
+    }
+
+    /// Opens an item's menu like `activate`, and reports how (or why it couldn't). Used by the `click` command.
+    func open(_ item: MenuBarItem) async throws -> ItemActivator.Result {
+        let positions = prepareActivation(item)
+        defer { finishActivation() }
+        return try await activator.activate(item, orderPositions: positions)
+    }
+
+    /// Closes SnugBar's panels before an item is focused or clicked, and remembers the item as recent.
+    private func prepareActivation(_ item: MenuBarItem) -> [String: Double]? {
+        bar.dismiss()
+        search.dismiss()
+        barRefreshTimer?.invalidate()
+        activationsInFlight += 1
+        if state.revealInBar && state.reveal != .collapsed { collapse() }
+        update { $0.noteRecent(item.id) }
+        return try? orderFile.readPositions()
+    }
+
+    private func finishActivation() {
+        activationsInFlight -= 1
+        // The synthetic click's mouse-up and the pointer warp land a moment later.
+        gesturesQuietUntil = Date().addingTimeInterval(0.6)
     }
 
     /// True while an item is being opened, and briefly after.
@@ -441,6 +469,78 @@ final class AppController: ObservableObject {
         return items
     }
 
+    // MARK: - Control surface (CLI, MCP, URL scheme)
+
+    /// Every item SnugBar knows, without its own, and whether each is on screen in the menu bar now.
+    func controlItems() -> [ControlEngineItem] {
+        let live = Permissions.accessibility ? snapshotItems() : []
+        let liveIDs = Set(live.map(\.id))
+        let items = catalog.merged(live: live, running: ItemGathering.runningBundleIDs(), knownApps: settings.knownApps)
+            .filter { $0.ownerBundleID != ownBundleID }
+        // While hiding (or focusing an item), only allowed apps are on screen; otherwise everything is.
+        let allowed: Set<String>? = assessment.isFocusing || (activeHider === assessment && !assessment.isSuspended)
+            ? assessment.allowedBundleIDs : nil
+        return items.map { item in
+            let onScreen = liveIDs.contains(item.id) && !item.isOverflowed
+                && (item.isAppleItem || allowed?.contains(item.ownerBundleID) ?? true)
+            return ControlEngineItem(item: item, visible: onScreen)
+        }
+    }
+
+    /// One app can be shown on its own only with the per-app hider.
+    var canRevealSingleApp: Bool { preferredHider() === assessment && assessment.isAvailable }
+
+    /// Shows one app's items until the auto-hide delay passes (later while one of its menus is open).
+    func revealApp(_ bundleID: String) {
+        assessment.allowTemporarily(bundleID)
+        scheduleAppRehide(bundleID, after: settings.autoCollapse.delay)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.noteVisibleApps() }
+    }
+
+    /// Ends a reveal of one app now. When the app is still on screen because its whole section is revealed in the
+    /// menu bar, the menu bar collapses.
+    func hideApp(_ bundleID: String) {
+        appRevealTimers.removeValue(forKey: bundleID)?.invalidate()
+        assessment.endTemporaryAllowance(bundleID)
+        let section = settings.sections.section(forBundleID: bundleID)
+        if state.visibleSections.contains(section), !state.collapsedSections.contains(section) { collapse() }
+    }
+
+    private func scheduleAppRehide(_ bundleID: String, after delay: TimeInterval) {
+        appRevealTimers.removeValue(forKey: bundleID)?.invalidate()
+        appRevealTimers[bundleID] = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let pids = Set(NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleID }.map(\.processIdentifier))
+                if OpenMenuDetector.isMenuOpenNow(ownerPIDs: pids) {
+                    self.scheduleAppRehide(bundleID, after: 1)
+                } else {
+                    self.appRevealTimers.removeValue(forKey: bundleID)
+                    self.assessment.endTemporaryAllowance(bundleID)
+                }
+            }
+        }
+    }
+
+    /// How `order` moves items now: the order file when access is granted, else ⌘-drag (needs Accessibility).
+    var controlArranger: ControlArranger? {
+        if orderFileGranted || orderFile.status == .granted { return .orderFile }
+        return Permissions.accessibility ? .drag : nil
+    }
+
+    /// Moves a shown item next to another with the Arranger (order file, or the ⌘-drag fallback).
+    func order(_ item: MenuBarItem, _ placement: ControlPlacement) async throws -> ControlArranger {
+        let p: Arranger.Placement
+        switch placement {
+        case let .before(anchor): p = .before(anchor)
+        case let .after(anchor): p = .after(anchor)
+        }
+        let result = try await arranger.move(item, p)
+        return result.method == .orderFile ? .orderFile : .drag
+    }
+
+    var hiderBackendName: String { preferredHider().backend.rawValue }
+
     // MARK: - Settings
 
     /// Changes settings, saves them, and applies what changed.
@@ -477,8 +577,9 @@ final class AppController: ObservableObject {
         }
     }
 
-    func setSection(_ section: Section, for bundleID: String) {
-        update { $0.sections.set(section, forBundleID: bundleID) }
+    /// Moves one or more apps at once: one settings change, so one save and one hider update.
+    func setSection(_ section: Section, for bundleIDs: [String]) {
+        update { $0.sections.set(section, forBundleIDs: bundleIDs) }
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
@@ -529,6 +630,7 @@ final class AppController: ObservableObject {
     }
 
     func refreshPermissions() {
+        guard !isPreview else { return }
         let hadAccessibility = accessibilityGranted
         accessibilityGranted = Permissions.accessibility
         screenRecordingGranted = Permissions.screenRecording
@@ -777,7 +879,7 @@ final class AppController: ObservableObject {
     }
 
     private func scheduleSave() {
-        guard !saveScheduled else { return }
+        guard !saveScheduled, !isPreview else { return }
         saveScheduled = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self else { return }

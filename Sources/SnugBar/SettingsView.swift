@@ -3,22 +3,94 @@ import SnugBarCore
 import SnugBarEngine
 import SwiftUI
 
+/// Which Settings pane is selected. The last one is remembered in UserDefaults (not in settings.json).
+@MainActor
+final class SettingsNavigation: ObservableObject {
+    static let defaultsKey = "SettingsSelectedPane"
+
+    @Published var pane: SettingsPane {
+        didSet { defaults?.set(pane.rawValue, forKey: Self.defaultsKey) }
+    }
+
+    private let defaults: UserDefaults?
+
+    /// - Parameter defaults: where the selection is remembered; nil remembers nothing (offscreen snapshots).
+    init(defaults: UserDefaults?, pane: SettingsPane? = nil) {
+        self.defaults = defaults
+        self.pane = pane ?? defaults?.string(forKey: Self.defaultsKey).flatMap(SettingsPane.init(rawValue:)) ?? .general
+    }
+}
+
+/// Settings: the panes in a sidebar on the left, the selected pane on the right.
 struct SettingsView: View {
+    static let minSize = CGSize(width: 680, height: 460)
+
     @ObservedObject var controller: AppController
+    @ObservedObject var control: ControlSurface
+    @ObservedObject var navigation: SettingsNavigation
 
     var body: some View {
-        TabView {
-            GeneralSettings(controller: controller)
-                .tabItem { Label("General", systemImage: "gearshape") }
-            SectionsSettings(controller: controller)
-                .tabItem { Label("Sections", systemImage: "rectangle.split.3x1") }
-            ShortcutSettings(controller: controller)
-                .tabItem { Label("Shortcuts", systemImage: "keyboard") }
-            PermissionSettings(controller: controller)
-                .tabItem { Label("Permissions", systemImage: "lock.shield") }
+        // The sidebar always stays: the visibility is fixed and its toolbar toggle removed.
+        NavigationSplitView(columnVisibility: .constant(.all)) {
+            SettingsSidebar(navigation: navigation)
+                .toolbar(removing: .sidebarToggle)
+                .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 260)
+        } detail: {
+            pane(navigation.pane)
+                .navigationTitle(navigation.pane.title)
         }
-        .frame(minWidth: 520, minHeight: 460)
+        .frame(minWidth: Self.minSize.width, minHeight: Self.minSize.height)
     }
+
+    @ViewBuilder
+    private func pane(_ pane: SettingsPane) -> some View {
+        switch pane {
+        case .general: GeneralSettings(controller: controller)
+        case .sections: SectionsSettings(controller: controller)
+        case .shortcuts: ShortcutSettings(controller: controller)
+        case .control: ControlSettings(controller: controller, control: control)
+        case .permissions: PermissionSettings(controller: controller)
+        }
+    }
+}
+
+private struct SettingsSidebar: View {
+    @ObservedObject var navigation: SettingsNavigation
+
+    var body: some View {
+        // Selecting nothing (e.g. ⌘-clicking the selected row) keeps the current pane.
+        List(selection: Binding<SettingsPane?>(
+            get: { navigation.pane },
+            set: { if let pane = $0 { navigation.pane = pane } }
+        )) {
+            ForEach(SettingsPane.allCases) { pane in
+                Label(pane.title, systemImage: pane.systemImage).tag(pane)
+            }
+        }
+        .listStyle(.sidebar)
+    }
+}
+
+/// The Settings window: a titled, resizable AppKit window hosting `SettingsView`, whose title is the selected pane.
+/// SnugBar stays an accessory app while it is open (see `AppDelegate.showSettings`).
+@MainActor
+enum SettingsWindow {
+    static let defaultContentSize = NSSize(width: 760, height: 520)
+    static let autosaveName = "SnugBarSettings"
+
+    static func configure(_ window: NSWindow, controller: AppController, control: ControlSurface, navigation: SettingsNavigation) {
+        let hosting = NSHostingController(rootView: SettingsView(controller: controller, control: control, navigation: navigation))
+        // The toolbar (sidebar look, no sidebar toggle) and the title come from the SwiftUI view.
+        hosting.sceneBridgingOptions = [.title, .toolbars]
+        window.contentViewController = hosting
+        window.toolbarStyle = .unified
+        window.title = navigation.pane.title
+        window.contentMinSize = SettingsView.minSize
+        window.setContentSize(defaultContentSize)
+        window.isReleasedWhenClosed = false
+    }
+
+    static let styleMask: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
 }
 
 /// A binding into one settings field that saves through the controller.
@@ -132,49 +204,95 @@ private struct GeneralSettings: View {
 
 // MARK: - Sections
 
+/// The apps list allows multi-selection (⌘-click, ⇧-click, ⌘A); "Move To…" (button and right-click) moves the
+/// selected apps with one settings change, through the same path as each row's own picker.
 private struct SectionsSettings: View {
     @ObservedObject var controller: AppController
+    @State private var selection: Set<String> = []
 
     var body: some View {
-        Form {
-            Section {
-                Picker("New apps go to", selection: setting(controller, \.sections.defaultSection)) {
-                    ForEach(SnugBarCore.Section.allCases, id: \.self) { Text($0.title).tag($0) }
-                }
-            } footer: {
-                Text("macOS 27 hides whole apps, so all items of one app are always in the same section. Apple's items, such as the clock and Control Center, are always shown.")
-                    .font(.callout).foregroundStyle(.secondary)
+        let rows = controller.sectionRows
+        let bundleIDs = rows.map(\.bundleID)
+        let selected = BulkSectionMove.targets(selection: selection, rows: bundleIDs)
+        VStack(alignment: .leading, spacing: 10) {
+            Picker("New apps go to", selection: setting(controller, \.sections.defaultSection)) {
+                ForEach(SnugBarCore.Section.allCases, id: \.self) { Text($0.title).tag($0) }
             }
+            .fixedSize()
+            Text("macOS 27 hides whole apps, so all items of one app are always in the same section. Apple's items, such as the clock and Control Center, are always shown.")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
-            Section("Apps") {
-                let rows = controller.sectionRows
+            List(selection: $selection) {
+                ForEach(rows, id: \.bundleID) { row in
+                    appRow(row)
+                }
+            }
+            .listStyle(.bordered(alternatesRowBackgrounds: true))
+            .frame(minHeight: 120, maxHeight: .infinity)
+            .contextMenu(forSelectionType: String.self) { ids in
+                let targets = BulkSectionMove.targets(selection: ids, rows: bundleIDs)
+                if !targets.isEmpty { moveMenu(targets) }
+            }
+            .overlay {
                 if rows.isEmpty {
                     Text("No apps seen yet. Apps appear here once their items have been visible in the menu bar.")
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(rows, id: \.bundleID) { row in
-                    HStack {
-                        AppIcon(bundleID: row.bundleID).frame(width: 20, height: 20)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(row.name).lineLimit(1)
-                            Text(row.bundleID).font(.caption).foregroundStyle(.secondary)
-                                .lineLimit(1).truncationMode(.middle)
-                        }
-                        Spacer()
-                        Picker("", selection: Binding(
-                            get: { controller.settings.sections.section(forBundleID: row.bundleID) },
-                            set: { controller.setSection($0, for: row.bundleID) }
-                        )) {
-                            ForEach(SnugBarCore.Section.allCases, id: \.self) { Text($0.title).tag($0) }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .fixedSize()
-                    }
+                        .foregroundStyle(.secondary).multilineTextAlignment(.center).padding()
                 }
             }
+            .background {
+                // ⌘A selects every app. SnugBar has no Edit menu, so the list doesn't get Select All on its own.
+                Button("Select All") { selection = Set(bundleIDs) }
+                    .keyboardShortcut("a", modifiers: .command)
+                    .opacity(0)
+                    .accessibilityHidden(true)
+            }
+
+            HStack {
+                moveMenu(selected)
+                    .fixedSize()
+                    .disabled(selected.isEmpty)
+                Spacer()
+            }
+            Text("Select several apps with ⌘-click or ⇧-click to move them together.")
+                .font(.callout).foregroundStyle(.secondary)
         }
-        .formStyle(.grouped)
+        .padding(20)
+        // The split view measures the pane at a tiny width; the wrapped description would then ask for thousands of
+        // points of height and push the pane out of the window.
+        .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onChange(of: bundleIDs) { _, listed in selection.formIntersection(listed) }
+    }
+
+    private func appRow(_ row: (bundleID: String, name: String)) -> some View {
+        HStack {
+            AppIcon(bundleID: row.bundleID).frame(width: 20, height: 20)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(row.name).lineLimit(1)
+                Text(row.bundleID).font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            Spacer()
+            Picker("", selection: Binding(
+                get: { controller.settings.sections.section(forBundleID: row.bundleID) },
+                set: { controller.setSection($0, for: [row.bundleID]) }
+            )) {
+                ForEach(SnugBarCore.Section.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .fixedSize()
+        }
+        .padding(.vertical, 2)
+    }
+
+    /// "Move To…" (or "Move 3 Apps To…") with the three sections.
+    private func moveMenu(_ bundleIDs: [String]) -> some View {
+        Menu(BulkSectionMove.title(count: bundleIDs.count)) {
+            ForEach(SnugBarCore.Section.allCases, id: \.self) { section in
+                Button(section.title) { controller.setSection(section, for: bundleIDs) }
+            }
+        }
     }
 }
 

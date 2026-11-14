@@ -63,6 +63,14 @@ struct DebugRunner {
         self.invocation = invocation
     }
 
+    /// Where the JSON goes. Commands whose `--out` is an image write the JSON beside it (same name, `.json`).
+    private var envelopeURL: URL? {
+        guard let out = invocation.outputURL else { return nil }
+        return Self.imageCommands.contains(invocation.command) ? out.deletingPathExtension().appendingPathExtension("json") : out
+    }
+
+    static let imageCommands: Set<String> = ["settings-snapshot"]
+
     func run() async -> Int32 {
         let started = Date()
         var result: (any Encodable)?
@@ -85,7 +93,7 @@ struct DebugRunner {
             encoder.dateEncodingStrategy = .iso8601
             var data = try encoder.encode(envelope)
             data.append(0x0A)
-            if let url = invocation.outputURL {
+            if let url = envelopeURL {
                 try AtomicFile.write(data, to: url)
             } else {
                 FileHandle.standardOutput.write(data)
@@ -115,8 +123,10 @@ struct DebugRunner {
         case "letters": return letters()
         case "bar-items": return barItems()
         case "key-images": return try keyImages()
+        case "serve": return try await serve()
+        case "settings-snapshot": return try await settingsSnapshot()
         default:
-            throw Failure("unknown command '\(invocation.command)'; use status, list, hide, click, move, capture, order-file, input, fit-plan, search, letters, bar-items or key-images")
+            throw Failure("unknown command '\(invocation.command)'; use status, list, hide, click, move, capture, order-file, input, fit-plan, search, letters, bar-items, key-images, serve or settings-snapshot")
         }
     }
 

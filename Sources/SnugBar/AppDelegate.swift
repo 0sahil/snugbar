@@ -184,14 +184,27 @@ final class ClosureMenuItem: NSMenuItem {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let controller = AppController()
+    private lazy var control = ControlSurface(controller: controller)
     private var statusItem: StatusItemController?
     private var settingsWindow: NSWindow?
+    private let settingsNavigation = SettingsNavigation(defaults: .standard)
+    private var settingsCancellables: Set<AnyCancellable> = []
     private var signalSources: [DispatchSourceSignal] = []
     private var didFinishLaunching = false
+
+    /// `snugbar://` links arrive as Apple events. Registered before launch finishes so a link that launches SnugBar
+    /// is handled too.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSAppleEventManager.shared().setEventHandler(
+            self, andSelector: #selector(handleGetURL(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL)
+        )
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = StatusItemController(controller: controller) { [weak self] in self?.showSettings() }
         controller.start()
+        control.start()
         handleTerminationSignals()
         // Activations during launch are not the user asking for the window.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.didFinishLaunching = true }
@@ -202,7 +215,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        control.stop()
         controller.stop()
+    }
+
+    /// Identifies the sending app (its pid from the event, then its bundle ID) so consent can be remembered per app.
+    @objc private func handleGetURL(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
+        guard let url = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue else { return }
+        lastLinkAt = Date()
+        var pid: pid_t?
+        if let sender = event.attributeDescriptor(forKeyword: AEKeyword(keySenderPIDAttr)), sender.int32Value > 0 {
+            pid = sender.int32Value
+        } else if let address = event.attributeDescriptor(forKeyword: AEKeyword(keyAddressAttr)),
+                  address.descriptorType == DescType(typeKernelProcessID), address.int32Value > 0 {
+            pid = address.int32Value
+        }
+        let app = pid.flatMap { NSRunningApplication(processIdentifier: $0) }
+        control.open(url, caller: .init(bundleID: app?.bundleIdentifier, name: app?.localizedName))
     }
 
     /// Opening SnugBar again (Finder, Spotlight, `open`) shows Settings: the way back when the icon is hidden.
@@ -215,20 +244,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// an activation with no window open is treated the same way.
     func applicationDidBecomeActive(_ notification: Notification) {
         guard didFinishLaunching, settingsWindow?.isVisible != true else { return }
-        showSettings()
+        // Opening a snugbar:// link can activate SnugBar too (before or after the link arrives); that isn't a request
+        // for the window, so wait a moment to see whether a link came with this activation.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self, Date().timeIntervalSince(self.lastLinkAt) > 1.5, self.settingsWindow?.isVisible != true else { return }
+            self.showSettings()
+        }
     }
 
-    func showSettings() {
+    /// When the last `snugbar://` link arrived.
+    private var lastLinkAt = Date.distantPast
+
+    /// Opens Settings, on `pane` when given (otherwise on the pane selected last).
+    func showSettings(pane: SettingsPane? = nil) {
+        if let pane { settingsNavigation.pane = pane }
         if settingsWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 560, height: 520),
-                styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false
+                contentRect: NSRect(origin: .zero, size: SettingsWindow.defaultContentSize),
+                styleMask: SettingsWindow.styleMask, backing: .buffered, defer: false
             )
-            window.title = "SnugBar Settings"
-            window.contentViewController = NSHostingController(rootView: SettingsView(controller: controller))
-            window.isReleasedWhenClosed = false
-            window.setFrameAutosaveName("SnugBarSettings")
-            if !window.setFrameUsingName("SnugBarSettings") { window.center() }
+            SettingsWindow.configure(window, controller: controller, control: control, navigation: settingsNavigation)
+            window.setFrameAutosaveName(SettingsWindow.autosaveName)
+            if window.setFrameUsingName(SettingsWindow.autosaveName) {
+                // A frame saved by the older, narrower tabbed window is grown to the new minimum.
+                let content = window.contentRect(forFrameRect: window.frame).size
+                if content.width < SettingsView.minSize.width || content.height < SettingsView.minSize.height {
+                    let top = window.frame.maxY
+                    window.setContentSize(NSSize(width: max(content.width, SettingsWindow.defaultContentSize.width),
+                                                 height: max(content.height, SettingsWindow.defaultContentSize.height)))
+                    window.setFrameTopLeftPoint(NSPoint(x: window.frame.minX, y: top))
+                }
+            } else {
+                window.center()
+            }
+            settingsNavigation.$pane
+                .sink { [weak window] pane in window?.title = pane.title }
+                .store(in: &settingsCancellables)
             settingsWindow = window
         }
         controller.noteVisibleApps()
