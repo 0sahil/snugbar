@@ -6,7 +6,9 @@
 
 <p align="center">A menu bar manager for macOS 27, with search, a command line and an MCP server.</p>
 
-<!-- screenshot: docs/images/snugbar-bar.png -->
+<p align="center">
+  <img src="docs/images/snugbar-bar.png" alt="The SnugBar Bar open under SnugBar's icon in the menu bar, listing Hidden, Always Hidden and Didn't Fit items">
+</p>
 
 SnugBar hides the menu bar items you don't need and keeps the rest tidy. Hidden items open in a small panel under
 the menu bar, where clicking one opens its real menu, and items that don't fit beside the notch go there too instead
@@ -63,6 +65,8 @@ it off.
 ### Layout editor and spacers
 **Edit Layout…** shows Shown, Hidden and Always Hidden in menu bar order, with each item's picture (or its app's icon;
 rest the pointer on a tile for its name).
+
+<img src="docs/images/layout-editor.png" width="640" alt="The layout editor with Shown, Hidden and Always Hidden rows, three Hidden apps selected and a Move 3 Apps To menu">
 
 - Drag within a row to reorder it, or onto another row to move the app there. Click selects, ⌘-click adds or
   removes, ⇧-click selects a range, ⌘A selects everything, Esc clears; dragging a selected tile moves the whole
