@@ -9,23 +9,50 @@ public enum PermissionKind: String, CaseIterable, Codable, Sendable {
     /// The Menu Bar folder (the system order file): reorder without moving the pointer.
     case menuBarFolder
 
+    /// Its pane's name in System Settings > Privacy & Security on macOS 27, or "Menu Bar Folder". Users look for
+    /// this name, so titles and errors use it (`SystemSettingsNames`).
     public var title: String {
         switch self {
-        case .accessibility: return "Accessibility"
-        case .screenRecording: return "Screen Recording"
+        case .accessibility: return SystemSettingsNames.accessibilityPane
+        case .screenRecording: return SystemSettingsNames.screenRecordingPane
         case .menuBarFolder: return "Menu Bar Folder"
+        }
+    }
+
+    /// The pane's name before macOS 27, when it changed in a way users wouldn't recognize.
+    public var earlierName: String? {
+        switch self {
+        case .accessibility: return SystemSettingsNames.accessibilityEarlierName
+        case .screenRecording, .menuBarFolder: return nil
+        }
+    }
+
+    /// "(called Accessibility in earlier macOS versions)", or nil.
+    public var earlierNameNote: String? {
+        earlierName.map { "(called \($0) in earlier macOS versions)" }
+    }
+
+    /// The anchor that opens its pane (`x-apple.systempreferences:com.apple.preference.security?<anchor>`); nil for
+    /// the folder.
+    public var settingsAnchor: String? {
+        switch self {
+        case .accessibility: return SystemSettingsNames.accessibilityAnchor
+        case .screenRecording: return SystemSettingsNames.screenRecordingAnchor
+        case .menuBarFolder: return nil
         }
     }
 
     public var isRequired: Bool { self == .accessibility }
 
-    /// What SnugBar uses it for, one sentence.
+    /// What SnugBar uses it for. Shown where each permission is explained (the setup page and Settings >
+    /// Permissions), so it carries the earlier name once.
     public var purpose: String {
         switch self {
         case .accessibility:
-            return "SnugBar uses Accessibility to read the menu bar and open items."
+            return "SnugBar uses \(title) \(earlierNameNote ?? "") to read the menu bar and open items."
         case .screenRecording:
-            return "SnugBar uses Screen Recording to show pictures of items in the SnugBar Bar and the layout editor."
+            // The pane's name now says audio; SnugBar never records any.
+            return "SnugBar uses \(title) to show pictures of items in the SnugBar Bar and the layout editor. It captures only the menu bar, never audio."
         case .menuBarFolder:
             return "With access to the Menu Bar folder, SnugBar can reorder items without moving the pointer."
         }
@@ -43,11 +70,11 @@ public enum PermissionKind: String, CaseIterable, Codable, Sendable {
         }
     }
 
-    /// The button that opens the right System Settings pane, or the folder picker.
+    /// The button that opens the right System Settings pane, or the folder picker. The pane's full name is the title
+    /// beside it, so the button doesn't repeat it (and stays short).
     public var buttonTitle: String {
         switch self {
-        case .accessibility: return "Open Accessibility Settings"
-        case .screenRecording: return "Open Screen Recording Settings"
+        case .accessibility, .screenRecording: return "Open System Settings"
         case .menuBarFolder: return "Choose Folder…"
         }
     }
@@ -60,14 +87,36 @@ public enum PermissionKind: String, CaseIterable, Codable, Sendable {
         }
     }
 
-    /// "Needs Accessibility", used as the reason a feature is unavailable.
+    /// A short name for tight places, as in "Needs Device Control" (a feature's reason on one line).
     public var needsPhrase: String {
         switch self {
-        case .accessibility: return "Accessibility"
-        case .screenRecording: return "Screen Recording"
+        case .accessibility: return SystemSettingsNames.accessibilityShort
+        case .screenRecording: return SystemSettingsNames.screenRecordingShort
         case .menuBarFolder: return "Menu Bar folder"
         }
     }
+}
+
+/// The System Settings names SnugBar's wording points to, in one place.
+///
+/// macOS 27 renamed two panes in Privacy & Security: Accessibility is now "Device Control and Data Access" and
+/// Screen Recording is "Screen & System Audio Recording" (macOS 27.2, SecurityPrivacyExtension.appex
+/// Localizable.loctable, keys `ACCESSIBILITY` and `SCREENANDAUDIOCAPTURE`). The deep-link anchors didn't change: the
+/// same extension's PrivacySecurity.searchTerms still registers `Privacy_Accessibility` and `Privacy_ScreenCapture`.
+public enum SystemSettingsNames {
+    public static let privacyAndSecurity = "System Settings > Privacy & Security"
+    public static let accessibilityPane = "Device Control and Data Access"
+    public static let accessibilityEarlierName = "Accessibility"
+    /// The start of the pane's name, for the menu entry and one-line reasons.
+    public static let accessibilityShort = "Device Control"
+    public static let screenRecordingPane = "Screen & System Audio Recording"
+    /// macOS 27 still calls the permission itself "Screen Recording" (key `SCREEN_CAPTURE`).
+    public static let screenRecordingShort = "Screen Recording"
+    public static let accessibilityAnchor = "Privacy_Accessibility"
+    public static let screenRecordingAnchor = "Privacy_ScreenCapture"
+
+    /// "System Settings > Privacy & Security > <pane>".
+    public static func path(_ pane: String) -> String { "\(privacyAndSecurity) > \(pane)" }
 }
 
 /// Which permissions SnugBar has. `orderFile` is the Menu Bar folder.
@@ -194,7 +243,7 @@ public struct FeatureAvailability: Equatable, Sendable {
         public var feature: AppFeature
         public var title: String
         public var available: Bool
-        /// Why not, when unavailable ("Needs Accessibility").
+        /// Why not, when unavailable ("Needs Device Control").
         public var reason: String?
     }
 
@@ -216,7 +265,7 @@ public struct FeatureAvailability: Equatable, Sendable {
         missing(for: feature).isEmpty
     }
 
-    /// "Needs Accessibility", "Needs Accessibility and Screen Recording", or nil when available.
+    /// "Needs Device Control", "Needs Device Control and Screen Recording", or nil when available.
     public func reason(_ feature: AppFeature) -> String? {
         let missing = missing(for: feature)
         guard !missing.isEmpty else { return nil }
@@ -243,24 +292,37 @@ public enum PermissionText {
     public static let setupWindowTitle = "Set Up SnugBar"
     public static let welcome = "SnugBar keeps your menu bar tidy: it hides the items you don’t need all the time and shows them when you ask."
     public static let welcomeDetail = "It needs a few permissions to do that. The next steps explain each one."
-    public static let reducedMode = "SnugBar runs in reduced mode until Accessibility is allowed: only basic hide and show work."
+    public static let reducedMode = "SnugBar runs in reduced mode until \(SystemSettingsNames.accessibilityPane) is allowed: only basic hide and show work."
+    /// Screen Recording is allowed in System Settings but this process still can't capture (macOS applies the grant
+    /// only after a restart).
     public static let restartForScreenRecording = "If you just allowed it, SnugBar needs to restart to use it."
     public static let restartButton = "Restart SnugBar"
     public static let showSetupAgain = "Show Setup Again…"
-    /// The menu's first entry when Accessibility is missing.
-    public static let accessibilityNeededMenuTitle = "Accessibility Needed…"
+    /// The menu's first entry when Accessibility is missing: short, an action, and it starts with the words the
+    /// user will see in System Settings. It opens the setup page, which has the pane's full name.
+    public static let accessibilityNeededMenuTitle = "Allow Device Control…"
     public static let setUpMenuTitle = "Set Up SnugBar…"
+    /// SnugBar's icon's tooltip in reduced mode.
+    public static let iconTooltipReduced = "SnugBar needs \(SystemSettingsNames.accessibilityPane) permission. Right-click for the menu."
+    /// "Allow SnugBar in System Settings > Privacy & Security > Device Control and Data Access."
+    public static func allowInSettings(_ permission: PermissionKind) -> String {
+        "Allow SnugBar in \(SystemSettingsNames.path(permission.title))."
+    }
     /// Error for `click`/`order` and other reader features without Accessibility.
     public static func needsAccessibility(_ what: String) -> String {
-        "\(what) needs Accessibility permission. Allow SnugBar in System Settings > Privacy & Security > Accessibility."
+        "\(what) needs \(SystemSettingsNames.accessibilityPane) permission. \(allowInSettings(.accessibility))"
     }
+    /// `move` with neither Accessibility (for ⌘-drag) nor the Menu Bar folder.
+    public static let moveNeedsPermission = "moving items needs \(SystemSettingsNames.accessibilityPane) (for ⌘-drag) or Menu Bar folder access; allow one in SnugBar's Settings > Permissions"
+    /// The command line's `status` line in reduced mode.
+    public static let statusReducedMode = "Reduced mode: \(SystemSettingsNames.accessibilityPane) is not granted, so only basic hide and show work."
     public static let doneIntro = "SnugBar is ready. With the current permissions:"
     public static let doneChangeLater = "You can change permissions at any time in Settings > Permissions."
 
     /// The layout editor's line when the Menu Bar folder isn't chosen.
     public static let layoutEditorNoFolder = "Without Menu Bar folder access, reordering Shown moves the pointer briefly and Hidden and Always Hidden can’t be reordered."
     /// Where the SnugBar Bar and layout editor say pictures need Screen Recording.
-    public static let noScreenRecordingPictures = "App icons are shown because SnugBar doesn’t have Screen Recording permission."
+    public static let noScreenRecordingPictures = "App icons are shown because SnugBar doesn’t have \(SystemSettingsNames.screenRecordingPane) permission."
 
     public static let privacyTelemetry = "SnugBar collects no usage data and has no telemetry."
     /// Feature 58: the update check is the only network request.

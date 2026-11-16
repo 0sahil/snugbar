@@ -57,7 +57,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let iconState = MenuBarIconState.resolve(state, accessibilityGranted: controller.accessibilityGranted, hasError: hasError)
         item?.button?.image = MenuBarIconRenderer.image(controller.settings.menuBarIcon, iconState)
         if !controller.accessibilityGranted {
-            item?.button?.toolTip = "SnugBar needs Accessibility permission. Right-click for the menu."
+            item?.button?.toolTip = PermissionText.iconTooltipReduced
         } else if state.zen {
             item?.button?.toolTip = "SnugBar: Zen mode is on. Click for the menu."
         } else {

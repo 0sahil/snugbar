@@ -74,7 +74,13 @@ public protocol ControlEngine: AnyObject {
     func setReveal(_ level: RevealLevel)
     func swap()
     func setZen(_ on: Bool)
+    /// Re-checks permissions that can't be read cheaply and synchronously (Screen Recording), before `status`.
+    func refreshPermissions() async
     func statusInfo() -> ControlStatusInfo
+}
+
+public extension ControlEngine {
+    func refreshPermissions() async {}
 }
 
 /// Runs control commands against an engine. Every transport (HTTP `/v1`, MCP, the URL scheme) goes through here.
@@ -114,6 +120,7 @@ public final class CommandRouter {
             r.items = ranked.map { controlItem($0.item, visible: visible[$0.item.id] ?? false) }
 
         case .status:
+            await engine.refreshPermissions()
             let info = engine.statusInfo()
             r.version = info.version
             r.hider = info.hider
@@ -200,7 +207,7 @@ public final class CommandRouter {
                 throw invalid("\(i.displayName) is not in the Shown section; order works within Shown")
             }
             guard engine.arranger != nil else {
-                throw ControlError(.unavailable, "moving items needs Accessibility (for ⌘-drag) or menu bar layout access; grant one in SnugBar's settings")
+                throw ControlError(.unavailable, PermissionText.moveNeedsPermission)
             }
             let used = try await engine.order(item, before != nil ? .before(anchor) : .after(anchor))
             r.id = item.id.rawValue

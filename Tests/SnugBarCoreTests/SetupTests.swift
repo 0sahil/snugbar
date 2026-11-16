@@ -1,7 +1,8 @@
 import XCTest
 @testable import SnugBarCore
 
-/// The setup window's steps, the launch decision, the Screen Recording restart hint and slider rounding.
+/// The setup window's steps, the launch decision and slider rounding (Screen Recording's restart line:
+/// ScreenRecordingAccessTests).
 final class SetupTests: XCTestCase {
     // MARK: - Steps
 
@@ -126,22 +127,6 @@ final class SetupTests: XCTestCase {
         XCTAssertEqual(try SettingsStore.decode(data).setupCompleted, true)
         settings.setupCompleted = false
         XCTAssertEqual(try SettingsStore.decode(try SettingsStore.encode(settings)).setupCompleted, false)
-    }
-
-    // MARK: - Screen Recording restart
-
-    func testRestartHintShowsOnlyAfterAskingAndComingBackWithoutTheGrant() {
-        var hint = ScreenRecordingRestartHint()
-        XCTAssertFalse(hint.shows(granted: false))
-        hint.noteReturned()
-        XCTAssertFalse(hint.shows(granted: false), "coming back without having asked")
-        hint.noteRequested()
-        XCTAssertFalse(hint.shows(granted: false), "asked, still in System Settings")
-        hint.noteReturned()
-        XCTAssertTrue(hint.shows(granted: false))
-        XCTAssertFalse(hint.shows(granted: true), "it applied without a restart")
-        hint.noteRequested()
-        XCTAssertFalse(hint.shows(granted: false), "asking again waits for the next return")
     }
 
     // MARK: - Sliders

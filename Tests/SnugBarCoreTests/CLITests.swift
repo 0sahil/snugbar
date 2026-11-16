@@ -204,15 +204,15 @@ final class CLIFormatterTests: XCTestCase {
         r.port = 47811
         r.token = true
         XCTAssertEqual(CLIFormatter.format(r, for: ControlRequest(.status)).stdout, """
-            Version:           0.1.0
-            State:             collapsed
-            Hiding:            whole apps (system)
-            Arranging:         ⌘-drag
-            Accessibility:     granted
-            Screen Recording:  not granted
-            Menu bar folder:   not granted
-            Server:            127.0.0.1:47811
-            Token:             required
+            Version:                          0.1.0
+            State:                            collapsed
+            Hiding:                           whole apps (system)
+            Arranging:                        ⌘-drag
+            Device Control and Data Access:   granted
+            Screen & System Audio Recording:  not granted
+            Menu bar folder:                  not granted
+            Server:                           127.0.0.1:47811
+            Token:                            required
 
             """)
     }

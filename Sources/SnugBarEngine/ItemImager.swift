@@ -61,19 +61,34 @@ public final class ItemImager {
             .appendingPathComponent("ItemImages", isDirectory: true)
     }
 
+    /// ScreenCaptureKit refused for lack of Screen Recording permission (`SCStreamError.userDeclined`).
+    public nonisolated static func isPermissionError(_ error: Error) -> Bool {
+        if let error = error as? CaptureError, case .noPermission = error { return true }
+        var next: NSError? = error as NSError
+        while let ns = next {
+            if ns.domain == SCStreamErrorDomain, ns.code == SCStreamError.Code.userDeclined.rawValue { return true }
+            next = ns.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        return false
+    }
+
     /// Captures the strip and refreshes the cache for every visible item. Returns the IDs captured.
     ///
     /// A picture is only kept when `MenuBarGeometry.isCleanCapture` accepts it (the item didn't move during the
     /// capture, is fully on screen and clear of the notch) and `CaptureValidation` does (as wide as the item now, not
     /// blank); otherwise the item keeps its earlier picture. Callers decide when items have settled enough to be
     /// captured at all (`CaptureSettleGate`).
-    /// - Parameter framesAfterCapture: reads the items' frames again once the capture is done. Without it the frames
-    ///   are assumed unchanged.
+    /// - Parameters:
+    ///   - preflight: check this process's `CGPreflightScreenCaptureAccess()` first. Right for a short-lived process;
+    ///     the running app passes false and decides with `ScreenRecordingAccess`, because that answer goes stale.
+    ///   - framesAfterCapture: reads the items' frames again once the capture is done. Without it the frames are
+    ///     assumed unchanged.
+    /// - Throws: `CaptureError.noPermission` when ScreenCaptureKit refuses for lack of permission.
     @discardableResult
     public func refresh(
-        _ items: [MenuBarItem], framesAfterCapture: (@MainActor () -> [ItemID: CGRect])? = nil
+        _ items: [MenuBarItem], preflight: Bool = true, framesAfterCapture: (@MainActor () -> [ItemID: CGRect])? = nil
     ) async throws -> [ItemID] {
-        guard CGPreflightScreenCaptureAccess() else { throw CaptureError.noPermission }
+        if preflight, !CGPreflightScreenCaptureAccess() { throw CaptureError.noPermission }
         let visible = items.filter { !$0.isOverflowed && $0.frame.width > 0 }
         guard !visible.isEmpty else { return [] }
 
@@ -81,6 +96,7 @@ public final class ItemImager {
         do {
             content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         } catch {
+            if Self.isPermissionError(error) { throw CaptureError.noPermission }
             throw CaptureError.failed(error.localizedDescription)
         }
         // Use the display holding the first visible item (global top-left coordinates, like AX frames).
@@ -105,6 +121,7 @@ public final class ItemImager {
         do {
             strip = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
         } catch {
+            if Self.isPermissionError(error) { throw CaptureError.noPermission }
             throw CaptureError.failed(error.localizedDescription)
         }
         lastCaptureDuration = Date().timeIntervalSince(started)

@@ -24,9 +24,7 @@ public enum SetupStep: String, CaseIterable, Codable, Sendable {
     public var title: String {
         switch self {
         case .welcome: return "Welcome to SnugBar"
-        case .accessibility: return "Accessibility"
-        case .screenRecording: return "Screen Recording"
-        case .menuBarFolder: return "Menu Bar Folder"
+        case .accessibility, .screenRecording, .menuBarFolder: return permission?.title ?? ""
         case .done: return "Ready"
         }
     }
@@ -115,30 +113,6 @@ public enum SetupLaunchDecision {
             if settingsFileExists && accessibility { return Decision(show: false, store: true) }
             return Decision(show: true, store: false)
         }
-    }
-}
-
-/// macOS often applies a Screen Recording grant only after the app restarts. After the user asked for it and came
-/// back to SnugBar with the permission still missing, SnugBar offers a restart.
-public struct ScreenRecordingRestartHint: Equatable, Sendable {
-    public private(set) var requested = false
-    public private(set) var returnedSinceRequest = false
-
-    public init() {}
-
-    /// The "Open Screen Recording Settings" button was used.
-    public mutating func noteRequested() {
-        requested = true
-        returnedSinceRequest = false
-    }
-
-    /// SnugBar became active again (the user came back from System Settings).
-    public mutating func noteReturned() {
-        if requested { returnedSinceRequest = true }
-    }
-
-    public func shows(granted: Bool) -> Bool {
-        requested && returnedSinceRequest && !granted
     }
 }
 

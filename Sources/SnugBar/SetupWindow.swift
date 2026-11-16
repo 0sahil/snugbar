@@ -35,7 +35,7 @@ struct SetupView: View {
     @ObservedObject var model: SetupModel
     @ObservedObject var controller: AppController
 
-    private var grants: PermissionGrants { controller.availability.grants }
+    private var grants: PermissionGrants { controller.shownGrants }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -81,7 +81,7 @@ struct SetupView: View {
                 }
             }
             .padding(.top, 4)
-            if permission == .screenRecording, controller.screenRecordingRestartHint.shows(granted: granted) {
+            if permission == .screenRecording, controller.screenRecording.needsRestart {
                 HStack(spacing: 8) {
                     paragraph(PermissionText.restartForScreenRecording)
                     Spacer()

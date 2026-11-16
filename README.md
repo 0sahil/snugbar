@@ -95,20 +95,24 @@ or Capsule).
 
 The first time SnugBar starts, a setup window explains each permission, shows whether it's allowed, and opens the
 right place in System Settings. Every page can be skipped; open the setup again from SnugBar's menu (Set Up SnugBar…)
-or Settings > Permissions. A newly allowed permission takes effect without restarting, except Screen Recording, which
-macOS often applies only after a restart (SnugBar offers a Restart button).
+or Settings > Permissions. A newly allowed permission takes effect without restarting, except Screen & System Audio
+Recording, which macOS often applies only after a restart (SnugBar then offers a Restart button).
+
+Both system permissions are in System Settings > Privacy & Security:
 
 | Permission | Used for | Without it |
 |---|---|---|
-| Accessibility (required) | Reading the menu bar and opening items | Reduced mode: only basic hide and show (the icon, shortcuts, and `expand`, `collapse`, `toggle`, `swap`, `zen`, `move`) |
-| Screen Recording (optional) | Pictures of items in the SnugBar Bar and the layout editor | App icons instead; everything else works |
+| Device Control and Data Access (required; called Accessibility in earlier macOS versions) | Reading the menu bar and opening items | Reduced mode: only basic hide and show (the icon, shortcuts, and `expand`, `collapse`, `toggle`, `swap`, `zen`, `move`) |
+| Screen & System Audio Recording (optional) | Pictures of items in the SnugBar Bar and the layout editor (only the menu bar is captured, never audio) | App icons instead; everything else works |
 | Menu Bar folder (optional) | Reordering items without moving the pointer (chosen once in an open panel) | Reordering moves the pointer briefly |
 
-In reduced mode SnugBar's icon shows a warning and its menu starts with "Accessibility Needed…". The SnugBar Bar,
+In reduced mode SnugBar's icon shows a warning and its menu starts with "Allow Device Control…". The SnugBar Bar,
 search, open by letter, the layout editor, the menu bar gestures, and opening Notification Center from the clock while
 items are hidden are unavailable; hidden items show in the menu bar instead. `click` and `order` answer `unavailable`,
 `list` and `search` list the apps SnugBar already knows without live positions, and `status` adds `reducedMode`.
-SnugBar checks Accessibility every few seconds, so allowing or removing it takes effect on its own.
+Reduced mode leaves the saved layout alone. SnugBar checks Device Control and Data Access every few seconds, so
+allowing or removing it takes effect on its own; Screen & System Audio Recording is checked whenever Settings, the
+setup window or the menu is open, for `status`, and before pictures are taken.
 
 ## Command line, AI agents and links
 

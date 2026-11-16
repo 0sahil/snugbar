@@ -379,15 +379,15 @@ public enum CLIFormatter {
             ["State:", state],
             ["Hiding:", hider],
             ["Arranging:", arranger(r.arranger)],
-            ["Accessibility:", granted(r.permissions?.accessibility)],
-            ["Screen Recording:", granted(r.permissions?.screenRecording)],
+            [SystemSettingsNames.accessibilityPane + ":", granted(r.permissions?.accessibility)],
+            [SystemSettingsNames.screenRecordingPane + ":", granted(r.permissions?.screenRecording)],
             ["Menu bar folder:", granted(r.permissions?.menuBarFolder)],
             ["Server:", r.port.map { "127.0.0.1:\($0)" } ?? "unknown"],
             ["Token:", r.token == true ? "required" : "not required"],
         ]
         var lines = columns(rows, header: nil)
         if r.reducedMode == true {
-            lines.append("Reduced mode: Accessibility is not granted, so only basic hide and show work.")
+            lines.append(PermissionText.statusReducedMode)
         }
         if let unavailable = r.unavailable, !unavailable.isEmpty {
             let titles = unavailable.map { AppFeature(rawValue: $0)?.title ?? $0 }

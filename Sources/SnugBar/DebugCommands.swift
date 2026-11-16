@@ -132,7 +132,7 @@ struct DebugRunner {
         case "setup-snapshot": return try await setupSnapshot()
         case "menu-snapshot": return try menuSnapshot()
         case "availability": return try availabilityReport()
-        case "permissions": return permissionsReport()
+        case "permissions": return await permissionsReport()
         case "menubar-icons": return try menuBarIcons()
         default:
             throw Failure("unknown command '\(invocation.command)'; use status, list, hide, click, move, capture, order-file, input, fit-plan, search, letters, bar-items, key-images, serve, settings-snapshot, layout-snapshot, bar-snapshot, reconcile, backups, setup-snapshot, menu-snapshot, availability, permissions or menubar-icons")
@@ -408,7 +408,7 @@ struct DebugRunner {
         }
         return CaptureResult(
             directory: dir.path,
-            screenRecording: Permissions.screenRecording,
+            screenRecording: Permissions.screenRecordingInProcess,
             captureMilliseconds: imager.lastCaptureDuration.map { Int($0 * 1000) },
             captureError: captureError,
             saved: saved,

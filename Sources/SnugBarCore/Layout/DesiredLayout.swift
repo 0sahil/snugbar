@@ -127,6 +127,17 @@ public struct DesiredLayout: Codable, Equatable, Sendable {
         shownOrder.removeAll { $0 == LayoutSpacer.keyPrefix + id }
     }
 
+    /// Removes, from every saved order, fallback IDs of items the same order has under order-file keys. Reduced mode
+    /// used to add such duplicates; this repairs a file that has them. Returns whether anything changed.
+    @discardableResult
+    public mutating func removeShadowedFallbacks() -> Bool {
+        let before = self
+        shownOrder = DesiredOrder.removingShadowedFallbacks(shownOrder)
+        hiddenOrder = DesiredOrder.removingShadowedFallbacks(hiddenOrder)
+        alwaysHiddenOrder = DesiredOrder.removingShadowedFallbacks(alwaysHiddenOrder)
+        return self != before
+    }
+
     public mutating func setSpacerWidth(id: String, _ width: Double) {
         guard let i = spacers.firstIndex(where: { $0.id == id }) else { return }
         spacers[i].width = LayoutSpacer.clamped(width)
@@ -176,8 +187,10 @@ public enum DesiredOrder {
     }
 
     /// Present keys take their order from `live`; absent keys keep their slots. Used when the user arranged the bar
-    /// by hand (⌘-drag) or in the editor.
+    /// by hand (⌘-drag) or in the editor. Fallback IDs in `live` of items `desired` has under order-file keys are
+    /// ignored: they are the same items, read without the order file to name them.
     public static func adopting(live: [String], into desired: [String]) -> [String] {
+        let live = unshadowed(live: live, desired: desired)
         var merged = merging(live: live, into: desired)
         let present = Set(live)
         var seen = Set<String>()
@@ -214,6 +227,50 @@ public enum DesiredOrder {
             if seen.insert(k).inserted { result.append(k) }
         }
         return result
+    }
+
+    /// The apps and Apple modules a list of keys names with order-file keys (`status:<bundle>::…`, `module:<Name>`).
+    struct FileKeyedOwners {
+        private var bundles: Set<String> = []
+        /// Normalized module name -> key, as `ItemIdentityResolver.matchModule` wants them.
+        private var modules: [String: String] = [:]
+
+        init(_ keys: [String]) {
+            for key in keys {
+                switch ItemID(rawValue: key).kind {
+                case let .status(bundle, _): bundles.insert(bundle)
+                case let .module(name): modules[ItemIdentityResolver.normalize(name)] = key
+                case .indexed, .other: break
+                }
+            }
+        }
+
+        /// `key` is a fallback ID (`<bundle>#n`, `com.apple.menuextra.<name>#n`) of an app or Apple item named here
+        /// under an order-file key.
+        func shadows(_ key: String) -> Bool {
+            guard case let .indexed(owner, _) = ItemID(rawValue: key).kind else { return false }
+            if AppleItems.isAppleIdentifier(owner) {
+                guard let suffix = AppleItems.suffix(ofIdentifier: owner) else { return false }
+                return ItemIdentityResolver.matchModule(suffix: suffix, moduleKeys: modules) != nil
+            }
+            return bundles.contains(owner)
+        }
+    }
+
+    /// `live` without fallback IDs of items `desired` already has under order-file keys. Without the order file (or
+    /// while an app's keys are ambiguous) the reader names items `<bundle>#n`; merging those in would list the same
+    /// items twice.
+    public static func unshadowed(live: [String], desired: [String]) -> [String] {
+        let owners = FileKeyedOwners(desired)
+        return live.filter { !owners.shadows($0) }
+    }
+
+    /// `order` without fallback IDs of items it also has under order-file keys (`<bundle>#0` beside
+    /// `status:<bundle>::Item-0`, `com.apple.menuextra.wifi#0` beside `module:WiFi`). Fallback IDs of apps without
+    /// order-file keys stay, and everything else keeps its order.
+    public static func removingShadowedFallbacks(_ order: [String]) -> [String] {
+        let owners = FileKeyedOwners(order)
+        return order.filter { !owners.shadows($0) }
     }
 
     /// Replaces keys through `map` (and back, with the inverse map).

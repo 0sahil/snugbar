@@ -28,7 +28,7 @@ First public release. SnugBar needs macOS 27 or later.
   commands: list, search, show, hide, click, move, order, expand, collapse, toggle, swap, zen and status. An access
   token can be required.
 - First-run setup that explains each permission, and a reduced mode that keeps basic hiding working without
-  Accessibility.
+  Device Control and Data Access (Accessibility before macOS 27).
 - "Menu bar icon" setting with two styles: Chevrons (the default) and Capsule.
 - Settings in one JSON file, with export and import.
 - In-app updates with Sparkle: SnugBar checks GitHub once a day and can install the update and relaunch. "Check for

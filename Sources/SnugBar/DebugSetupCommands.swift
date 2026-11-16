@@ -10,7 +10,8 @@ import SnugBarEngine
 /// - `menu-snapshot --grants <list|none> --out <txt>`: SnugBar's menu as text (title, enabled, state, second line),
 ///   built without a status item.
 /// - `availability --grants <list|none> --out <json>`: what works with those permissions.
-/// - `permissions --out <json>`: this copy's real permission status (no prompt).
+/// - `permissions --out <json>`: this copy's real permission status (no prompt). Screen Recording comes from the
+///   bundled helper run twice as a fresh process (what the running app uses) beside this process's own preflight.
 extension DebugRunner {
     /// `--grants accessibility,screenRecording,orderFile` or `none`.
     func grants(required: Bool = true) throws -> PermissionGrants? {
@@ -61,7 +62,7 @@ extension DebugRunner {
                 contentSize: [size.width, size.height], imagePixels: [rep.pixelsWide, rep.pixelsHigh],
                 progress: model.flow.progressText, forwardButton: model.flow.forwardTitle(grants: grants),
                 reducedModeNote: model.flow.showsReducedModeNote(grants: grants) || (step == .done && !grants.accessibility),
-                restartHint: controller.screenRecordingRestartHint.shows(granted: grants.screenRecording)
+                restartHint: controller.screenRecording.needsRestart
             )
         }
     }
@@ -173,20 +174,42 @@ extension DebugRunner {
     // MARK: - permissions
 
     struct PermissionsResult: Encodable {
+        struct FreshCheck: Encodable {
+            var granted: Bool?
+            var milliseconds: Int
+        }
+
         var bundlePath: String
         var accessibility: Bool
+        /// The fresh answer when the helper ran, else this process's preflight.
         var screenRecording: Bool
+        /// `CGPreflightScreenCaptureAccess()` in this process (kept for the life of a process).
+        var screenRecordingInProcess: Bool
+        var helper: String?
+        /// The helper's answers, from two separate processes.
+        var screenRecordingFresh: [FreshCheck]
         var orderFile: OrderFileAccess.Status
         var reducedMode: Bool
         var unavailable: [AppFeature]
     }
 
-    func permissionsReport() -> PermissionsResult {
+    func permissionsReport() async -> PermissionsResult {
         let status = Permissions.status(orderFile: orderFile)
-        let availability = FeatureAvailability(accessibility: status.accessibility, screenRecording: status.screenRecording,
+        var fresh: [PermissionsResult.FreshCheck] = []
+        if Permissions.helperURL != nil {
+            for _ in 0..<2 {
+                let started = Date()
+                let granted = await Permissions.freshScreenRecording()
+                fresh.append(.init(granted: granted, milliseconds: Int(Date().timeIntervalSince(started) * 1000)))
+            }
+        }
+        let screenRecording = fresh.last?.granted ?? status.screenRecording
+        let availability = FeatureAvailability(accessibility: status.accessibility, screenRecording: screenRecording,
                                                orderFile: status.orderFileAccess == .granted)
         return PermissionsResult(bundlePath: Bundle.main.bundlePath, accessibility: status.accessibility,
-                                 screenRecording: status.screenRecording, orderFile: status.orderFileAccess,
+                                 screenRecording: screenRecording, screenRecordingInProcess: status.screenRecording,
+                                 helper: Permissions.helperURL?.path, screenRecordingFresh: fresh,
+                                 orderFile: status.orderFileAccess,
                                  reducedMode: availability.isReduced, unavailable: availability.unavailable)
     }
 }

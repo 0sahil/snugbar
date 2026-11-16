@@ -643,7 +643,7 @@ private struct PermissionSettings: View {
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        let grants = controller.availability.grants
+        let grants = controller.shownGrants
         Form {
             Section {
                 ForEach(PermissionKind.allCases, id: \.self) { permission in
@@ -695,7 +695,7 @@ private struct PermissionSettings: View {
                     Button(granted ? "Choose Again…" : permission.buttonTitle) { action(permission) }
                 }
             }
-            if permission == .screenRecording, controller.screenRecordingRestartHint.shows(granted: granted) {
+            if permission == .screenRecording, controller.screenRecording.needsRestart {
                 HStack {
                     Text(PermissionText.restartForScreenRecording).font(.callout)
                     Spacer()

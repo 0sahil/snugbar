@@ -63,13 +63,18 @@ final class AppControlEngine: ControlEngine {
 
     func setZen(_ on: Bool) { controller.setZen(on) }
 
+    /// Screen Recording from a fresh process (this one's answer goes stale), at most every 2 s.
+    func refreshPermissions() async {
+        await controller.refreshScreenRecording()
+    }
+
     func statusInfo() -> ControlStatusInfo {
         let s = server()
         return ControlStatusInfo(
             hider: controller.hiderBackendName,
             permissions: ControlPermissions(
                 accessibility: Permissions.accessibility,
-                screenRecording: Permissions.screenRecording,
+                screenRecording: controller.screenRecording.isUsable,
                 menuBarFolder: controller.hasOrderFileAccess
             ),
             version: AppInfo.version,

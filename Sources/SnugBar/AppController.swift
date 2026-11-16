@@ -10,10 +10,10 @@ final class AppController: ObservableObject {
     @Published private(set) var state = BarState.initial
     @Published private(set) var lastError: String?
     @Published private(set) var accessibilityGranted = Permissions.accessibility
-    @Published private(set) var screenRecordingGranted = Permissions.screenRecording
+    /// Screen Recording as last checked: allowed, not allowed, or allowed but needing a restart. This process's own
+    /// preflight goes stale, so it is only the starting point (`refreshScreenRecording`).
+    @Published private(set) var screenRecording = ScreenRecordingAccess(preflight: Permissions.screenRecordingInProcess)
     @Published private(set) var orderFileGranted = false
-    /// Screen Recording was asked for and the user came back without it applying: offer a restart.
-    @Published private(set) var screenRecordingRestartHint = ScreenRecordingRestartHint()
     @Published private(set) var loginItemEnabled = LoginItem.isEnabled
     @Published private(set) var loginItemNeedsApproval = LoginItem.needsApproval
     @Published private(set) var hotkeyFailures: [String] = []
@@ -106,7 +106,7 @@ final class AppController: ObservableObject {
         self.settings = settings
         isPreview = true
         accessibilityGranted = grants.accessibility
-        screenRecordingGranted = grants.screenRecording
+        screenRecording = ScreenRecordingAccess(state: grants.screenRecording ? .granted : .notGranted)
         orderFileGranted = grants.orderFile
         loginItemEnabled = false
         loginItemNeedsApproval = false
@@ -361,8 +361,14 @@ final class AppController: ObservableObject {
             self.catalog.record(visibleItems.filter { $0.ownerBundleID == item.ownerBundleID }, isOnScreen: { _ in true })
             let positions = try? self.orderFile.readPositions()
             guard !self.imager.hasCachedImage(for: item.id, orderPositions: positions),
-                  Permissions.screenRecording else { return }
-            _ = try? await self.imager.refresh(visibleItems) { [reader = self.reader] in reader.currentFrames(orderPositions: positions) }
+                  self.screenRecording.isUsable else { return }
+            do {
+                _ = try await self.imager.refresh(visibleItems, preflight: false) { [reader = self.reader] in
+                    reader.currentFrames(orderPositions: positions)
+                }
+            } catch {
+                self.noteCaptureFailed(error)
+            }
         }
         return activator
     }
@@ -472,11 +478,18 @@ final class AppController: ObservableObject {
     /// frames are read again until every item settled or `captureSettleTimeout` passed. Nothing is captured while the
     /// user ⌘-drags items.
     func captureVisibleItems(then done: (() -> Void)? = nil) {
-        guard Permissions.screenRecording, Permissions.accessibility, !captureInFlight, !barIsFrozen,
+        guard screenRecording.systemGranted, Permissions.accessibility, !captureInFlight, !barIsFrozen,
               !assessment.isFocusing, !assessment.isSuspended
         else { done?(); return }
         captureInFlight = true
         Task { @MainActor in
+            // Revoked or granted since the last look: this process's own preflight can't tell (feature 86).
+            await self.refreshScreenRecording()
+            guard self.screenRecording.isUsable else {
+                self.captureInFlight = false
+                done?()
+                return
+            }
             var tried = Set<ItemID>()
             let deadline = Date().addingTimeInterval(Self.captureSettleTimeout)
             while !self.barIsFrozen, !self.assessment.isFocusing, !self.assessment.isSuspended {
@@ -489,7 +502,16 @@ final class AppController: ObservableObject {
                 let batch = items.filter { readyKeys.contains($0.id.rawValue) && !tried.contains($0.id) }
                 if !batch.isEmpty {
                     tried.formUnion(batch.map(\.id))
-                    _ = try? await self.imager.refresh(batch) { [reader = self.reader] in reader.currentFrames(orderPositions: positions) }
+                    do {
+                        // The batch is on screen and not overflowed, so the strip was captured.
+                        _ = try await self.imager.refresh(batch, preflight: false) { [reader = self.reader] in
+                            reader.currentFrames(orderPositions: positions)
+                        }
+                        self.screenRecording.noteCapture(.succeeded)
+                    } catch {
+                        self.noteCaptureFailed(error)
+                        if !self.screenRecording.isUsable { break }
+                    }
                 }
                 guard let next = readAgainAt, next < deadline else { break }
                 try? await Task.sleep(nanoseconds: UInt64(max(next.timeIntervalSinceNow, 0.05) * 1_000_000_000))
@@ -815,7 +837,6 @@ final class AppController: ObservableObject {
     }
 
     func grantScreenRecording() {
-        screenRecordingRestartHint.noteRequested()
         Permissions.requestScreenRecording()
         refreshPermissions()
     }
@@ -827,33 +848,78 @@ final class AppController: ObservableObject {
 
     /// What works with the permissions as last checked (features 86, 87).
     var availability: FeatureAvailability {
-        FeatureAvailability(accessibility: accessibilityGranted, screenRecording: screenRecordingGranted, orderFile: orderFileGranted)
+        FeatureAvailability(accessibility: accessibilityGranted, screenRecording: screenRecording.isUsable, orderFile: orderFileGranted)
+    }
+
+    /// The permissions Settings > Permissions and the setup window show as allowed. Screen Recording counts once
+    /// System Settings allows it, even while this process needs a restart to use it: the restart line says so, and
+    /// the button to System Settings would send the user to a switch that is already on.
+    var shownGrants: PermissionGrants {
+        var grants = availability.grants
+        grants.screenRecording = screenRecording.systemGranted
+        return grants
     }
 
     /// Re-reads every permission and applies a change of Accessibility at once (no relaunch). Called on activation,
     /// when the menu opens, when the setup or Settings window appears, every second while the setup window or the
-    /// Permissions pane is open, and by the Accessibility timer.
+    /// Permissions pane is open, and by the Accessibility timer. Screen Recording's fresh check runs in the
+    /// background, at most every 2 s.
     func refreshPermissions() {
         guard !isPreview else { return }
         let hadAccessibility = accessibilityGranted
         accessibilityGranted = Permissions.accessibility
-        screenRecordingGranted = Permissions.screenRecording
         orderFileGranted = orderFile.status == .granted
         refreshLoginItem()
         if accessibilityGranted != hadAccessibility { accessibilityChanged() }
+        Task { await self.refreshScreenRecording() }
     }
 
-    /// For `--debug setup-snapshot --restart-hint`: as if Screen Recording had been asked for and the user came back.
+    private var screenRecordingCheck: Task<Void, Never>?
+
+    /// Asks a fresh process whether Screen Recording is allowed (this process's own answer goes stale), at most
+    /// every `ScreenRecordingAccess.checkInterval` unless forced or a capture was just refused; when the system allows
+    /// it but this process's capture isn't known to work, probes it. A check already running is waited for.
+    @discardableResult
+    func refreshScreenRecording(force: Bool = false) async -> ScreenRecordingState {
+        guard !isPreview else { return screenRecording.state }
+        if let running = screenRecordingCheck {
+            await running.value
+            return screenRecording.state
+        }
+        let now = Date()
+        guard force || screenRecording.checkIsDue(at: now) else { return screenRecording.state }
+        screenRecording.noteCheckStarted(at: now)
+        let check = Task { @MainActor in
+            // Without the bundled helper (an unbundled build) this process's answer is the best there is.
+            let granted = await Permissions.freshScreenRecording() ?? Permissions.screenRecordingInProcess
+            self.screenRecording.noteSystemCheck(granted: granted)
+            if self.screenRecording.needsProbe {
+                self.screenRecording.noteProbe(await Permissions.probeScreenCapture())
+            }
+        }
+        screenRecordingCheck = check
+        await check.value
+        screenRecordingCheck = nil
+        return screenRecording.state
+    }
+
+    /// A capture failed: refused for permission turns pictures off now (app icons) and makes the next check due.
+    private func noteCaptureFailed(_ error: Error) {
+        guard ItemImager.isPermissionError(error) else { return }
+        screenRecording.noteCapture(.refused)
+        NSLog("SnugBar: screen capture refused for lack of permission; showing app icons")
+        Task { await self.refreshScreenRecording() }
+    }
+
+    /// For `--debug setup-snapshot --restart-hint`: allowed in System Settings, but this process can't capture yet.
     func previewRestartHint() {
         guard isPreview else { return }
-        screenRecordingRestartHint.noteRequested()
-        screenRecordingRestartHint.noteReturned()
+        screenRecording = ScreenRecordingAccess(state: .grantedNeedsRestart)
     }
 
     /// SnugBar became active again: the user may be back from System Settings.
     func noteReturnedToApp() {
         guard !isPreview else { return }
-        screenRecordingRestartHint.noteReturned()
         refreshPermissions()
     }
 

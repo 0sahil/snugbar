@@ -127,7 +127,9 @@ final class LayoutKeeper {
     }
 
     private func adoptUserOrder(before: [String]?, sectionsBefore: [SnugBarCore.Section: [String]]) {
-        guard !controller.loadFailed, !controller.dragWatcher.userIsDragging else { return }
+        // Without Accessibility there is no live reader, so items can't be matched to the keys the layout is saved
+        // under: nothing is adopted (reduced mode leaves the saved layout alone).
+        guard !controller.loadFailed, !controller.dragWatcher.userIsDragging, Permissions.accessibility else { return }
         let positions = try? controller.orderFile.readPositions()
         var changed = false
         let live = controller.liveLayoutKeys(controller.layoutLiveItems())
@@ -228,7 +230,7 @@ final class LayoutKeeper {
         let evaluation = LayoutReconcile.evaluate(
             layout: controller.settings.layout, live: controller.liveLayoutKeys(items),
             positions: positions, ownBundleID: controller.ownBundleID,
-            sectionKeys: controller.layoutSectionKeys(positions: positions),
+            sectionKeys: controller.layoutSectionKeys(positions: positions), readerAvailable: Permissions.accessibility,
             userDragging: controller.barIsFrozen, editorDragging: editorDragging, explicit: explicit, zen: controller.state.zen
         )
         lastEvaluation = evaluation
@@ -237,7 +239,8 @@ final class LayoutKeeper {
 
     private func execute(_ evaluation: LayoutReconcile.Evaluation, explicit: Bool) async {
         let decision = evaluation.decision
-        if !controller.loadFailed {
+        // The desired layout is only saved with a live reader (an evaluation without one has nothing to save).
+        if !controller.loadFailed, Permissions.accessibility {
             if let order = evaluation.orderToSave, order != controller.settings.layout.shownOrder {
                 controller.update { $0.layout.shownOrder = order }
             }

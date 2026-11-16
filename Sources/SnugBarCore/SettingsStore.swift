@@ -67,6 +67,9 @@ public enum SettingsMigration {
             // Version 2 added the menu bar icon style. Everyone upgrading keeps the icon they had.
             settings.menuBarIcon = .chevrons
         }
+        // A repair, not a schema step: reduced mode once saved fallback IDs of items the order already had under
+        // order-file keys. Removing them is idempotent, so it runs on every load and only ever changes such a file.
+        settings.layout.removeShadowedFallbacks()
         settings.schemaVersion = Settings.currentSchemaVersion
     }
 }

@@ -102,6 +102,11 @@ public final class InMemoryControlEngine: ControlEngine {
         actions.append("zen \(on ? "on" : "off")")
     }
 
+    /// How often `status` asked for a permission re-check.
+    public private(set) var permissionRefreshes = 0
+
+    public func refreshPermissions() async { permissionRefreshes += 1 }
+
     public func statusInfo() -> ControlStatusInfo { status }
 
     /// Lays items out left to right from x = 900, 28 points wide with 6 points between them.

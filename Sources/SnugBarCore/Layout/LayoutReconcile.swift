@@ -142,14 +142,23 @@ public enum LayoutReconcile {
         public var sectionOrdersToSave: [String: [String]] = [:]
     }
 
+    public static let noReaderReason = "no \(SystemSettingsNames.accessibilityPane) permission: the menu bar can’t be read, so the layout isn’t checked or saved"
+
+    /// - Parameter readerAvailable: the menu bar can be read (Accessibility). Without it items can't be matched to
+    ///   order-file keys, so nothing is planned, written or saved (reduced mode).
     public static func evaluate(
         layout: DesiredLayout, live: [String], positions: [String: Double]?, ownBundleID: String,
-        sectionKeys: [Section: [String]] = [:],
+        sectionKeys: [Section: [String]] = [:], readerAvailable: Bool = true,
         userDragging: Bool = false, editorDragging: Bool = false, explicit: Bool = false, zen: Bool = false
     ) -> Evaluation {
         let map = LayoutSpacer.orderKeyMap(layout.spacers, ownBundleID: ownBundleID, positions: positions)
+        guard readerAvailable else {
+            return Evaluation(decision: Decision(action: .skipped, reasons: [noReaderReason], plan: nil), orderToSave: nil, spacerKeys: map)
+        }
         let inverse = Dictionary(map.map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
         let normalized = DesiredOrder.normalized(layout.shownOrder, positions: positions)
+        // Items read without the order file to name them, already saved under their order-file keys: not new items.
+        let live = DesiredOrder.unshadowed(live: live, desired: normalized)
         let input = Input(
             desired: DesiredOrder.mapped(normalized, map), live: DesiredOrder.mapped(live, map), positions: positions,
             userDragging: userDragging, editorDragging: editorDragging, explicit: explicit, zen: zen
