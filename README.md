@@ -1,79 +1,115 @@
-# SnugBar
+<p align="center">
+  <img src="docs/images/icon.png" width="128" height="128" alt="SnugBar icon">
+</p>
 
-SnugBar is a free, open-source menu bar manager for macOS. It hides the menu bar items you don't need and
-keeps the rest tidy, using the way the macOS 27 menu bar works.
+<h1 align="center">SnugBar</h1>
 
-Status: early development, macOS 27 only. Nothing here is ready for everyday use yet.
+<p align="center">A menu bar manager for macOS 27, with search, a command line and an MCP server.</p>
 
-## Building
+<!-- screenshot: docs/images/snugbar-bar.png -->
 
-Requirements: macOS 27 and Xcode with Swift 6 or later.
+SnugBar hides the menu bar items you don't need and keeps the rest tidy. Hidden items open in a small panel under
+the menu bar, where clicking one opens its real menu, and items that don't fit beside the notch go there too instead
+of disappearing behind the system's overflow button. You can search every item by name, arrange them in a layout
+editor, and drive all of it from the `snugbar` command-line tool, AI agents (MCP) or `snugbar://` links.
+
+SnugBar is free and open source (MIT).
+
+## Install
+
+Download `SnugBar-<version>.dmg` from [Releases](https://github.com/0sahil/snugbar/releases/latest), open it and drag
+SnugBar to Applications. Then open SnugBar from Applications; a short setup explains the permissions it asks for.
+
+Homebrew (coming soon, once the tap is published):
 
 ```sh
-swift build            # debug build
-swift test             # unit tests
-scripts/build-app.sh   # release build, assembled and signed as build/SnugBar.app
+brew install --cask 0sahil/tap/snugbar
 ```
 
-`scripts/build-app.sh` signs ad-hoc by default. Set `SNUGBAR_SIGN_IDENTITY` to sign with your own identity.
-`scripts/build-app.sh --install` also copies the app to /Applications.
+SnugBar must run from /Applications: macOS hides its icon along with other apps when it runs from elsewhere.
 
-## Using SnugBar
+### Requirements
 
-- Click SnugBar's icon to show or hide hidden items. Right-click it (or ⌃/⌥-click) for the menu.
-- Settings: choose Settings… from the menu, or open SnugBar again from Applications or Spotlight (the way back
-  when the icon is turned off).
-- Sections are per app: **Shown**, **Hidden** (shown on demand) and **Always Hidden**. macOS 27 hides whole apps, so
-  all items of one app share a section. Apple's own items always stay visible.
-- Other ways to show hidden items, each optional: a global shortcut, clicking an empty part of the menu bar, resting
-  the pointer on the bar, or scrolling on it. Items hide again after a delay, when you click elsewhere, or when you
-  switch apps.
-- By default, hidden items open in the SnugBar Bar, a small panel under the menu bar; click an item there to open
-  its menu. Settings > General can switch this back to showing them in the menu bar itself.
-- With Menu Bar folder access, tiles in the SnugBar Bar can be dragged: within Hidden or Always Hidden to reorder it,
-  or onto the other group to move the app there. The order is saved like the layout editor's. Esc cancels a drag.
-  "Didn't Fit" items and apps the order file doesn't know yet stay put, and so does everything in letter mode.
-- When the menu bar has no room beside the notch, the leftmost shown apps move to the SnugBar Bar under "Didn't Fit"
-  instead of going behind the system's overflow button (can be turned off).
-- Optional shortcuts: a search palette for every menu bar item, "open by letter" (each item in the SnugBar Bar gets a
-  key), and Zen mode, which hides every app's items except Apple's and SnugBar's until you turn it off.
-- Settings live in `~/Library/Application Support/SnugBar/settings.json`, a plain JSON file.
-- SnugBar must run from /Applications: macOS hides its icon along with other apps when it runs from elsewhere.
+- macOS 27 or later. Earlier versions use a different menu bar engine and aren't supported.
+- A Mac with Apple silicon (macOS 27 runs only on Apple silicon).
 
-### Layout editor, spacers and backups
+## Features
 
-- **Edit Layout…** (in SnugBar's menu, and in Settings > Sections and Settings > Layout) opens a window with three rows:
-  Shown, Hidden and Always Hidden, in menu bar order, with each item's picture (or its app's icon). Rest the pointer
-  on a tile for its name.
-- Drag within a row to reorder it; drag onto another row to move the app there (all items of an app move together).
-  Click selects, ⌘-click adds or removes, ⇧-click selects a range within a row, ⌘A selects everything, Esc clears;
-  dragging a selected tile moves the whole selection. Right-click offers "Move To" and, for spacers, "Remove Spacer".
-  The clock and Control Center stay at the right end and can't be moved.
-- With Menu Bar folder access, items move without the pointer moving. Without it, reordering Shown in the editor
-  uses a quick ⌘-drag of the pointer, and Hidden and Always Hidden can't be reordered (their items aren't on screen to
-  drag). Their order is kept in the order file, so it shows when the section is expanded and in the SnugBar Bar.
-- **Spacers** are empty gaps (1–64 pt, default 16) owned by SnugBar. Add them with **Add Spacer**, drag them like items,
-  set the width of a selected spacer under the rows. They live in Shown only, and are not listed in the SnugBar Bar,
-  search, open by letter or `snugbar list`. Zen mode shrinks them to nothing until it ends; they keep their place.
-- SnugBar keeps the order you arranged: after it starts, when an app relaunches, after sleep, when displays change
-  and after a macOS update it puts items back where they were. These automatic checks only write the order file; they
-  never move the pointer, so without folder access they leave the order alone. Moving items by hand with ⌘-drag in
-  the menu bar still works, and the new order is kept.
-- New apps go to the section chosen in Settings > Sections (default Hidden); SnugBar's menu says once where each new
-  app went.
-- **Backups:** before every change to the item order, and before a reset, a restore, an import or a check after a macOS
-  update, SnugBar saves the system positions and its own layout (sections, order, spacers) in
-  `~/Library/Application Support/SnugBar/backups`, keeping the last 20. Settings > Layout lists them with **Restore**
-  and **Show in Finder**, and has **Reset Layout…** (every app back in the default section, no kept order, no spacers).
-- **Export Settings… / Import Settings…** in Settings > General save or load the settings file. An import is checked
-  first (a file from a newer SnugBar is refused) and the layout is backed up before it applies. The access token and
-  the Menu Bar folder access are never part of the file.
+### Sections
+Every app with menu bar items is in one of three sections: **Shown**, **Hidden** (shown on demand) and **Always
+Hidden**. macOS 27 hides whole apps, so all items of one app share a section. Apple's own items, such as the clock and
+Control Center, always stay. New apps go to Hidden unless you choose another section in Settings > Sections.
+
+### Showing hidden items
+Click SnugBar's icon (right-click or ⌃/⌥-click for its menu). Each of these is optional: a global shortcut, clicking an
+empty part of the menu bar, resting the pointer on it, or scrolling on it. Items hide again after a delay, when you
+click elsewhere, or when you switch apps, and stay while one of their menus is open.
+
+### SnugBar Bar
+By default hidden items open in the SnugBar Bar, a panel under the menu bar with a picture of each item; click one to
+open its menu. When the menu bar has no room beside the notch, the leftmost shown apps move there under "Didn't Fit"
+(this can be turned off).
+With Menu Bar folder access, tiles can be dragged to reorder a group or onto the other group to move the app. Settings
+> General can show hidden items in the menu bar itself instead.
+
+### Search and open by letter
+A shortcut opens a search palette for every menu bar item, hidden or not; Return opens the item's menu. Recently used
+items come first. "Open by letter" gives each item in the SnugBar Bar a key to press.
+
+### Zen mode
+One shortcut hides every app's items except Apple's and SnugBar's, and locks every way of showing them, until you turn
+it off.
+
+### Layout editor and spacers
+**Edit Layout…** shows Shown, Hidden and Always Hidden in menu bar order, with each item's picture (or its app's icon;
+rest the pointer on a tile for its name).
+
+- Drag within a row to reorder it, or onto another row to move the app there. Click selects, ⌘-click adds or
+  removes, ⇧-click selects a range, ⌘A selects everything, Esc clears; dragging a selected tile moves the whole
+  selection. Right-click offers "Move To" and, for spacers, "Remove Spacer". The clock and Control Center can't move.
+- With Menu Bar folder access, items move without the pointer moving. Without it, reordering Shown uses a quick ⌘-drag
+  of the pointer, and Hidden and Always Hidden can't be reordered (their items aren't on screen to drag).
+- **Spacers** are empty gaps (1–64 pt, default 16) that you drag like items. They live in Shown only and aren't listed
+  in the SnugBar Bar, search or `snugbar list`. Zen mode shrinks them to nothing until it ends.
+- ⌘-dragging items in the menu bar itself still works, and SnugBar keeps the new order.
+
+### Your layout stays put
+After SnugBar starts, when an app relaunches, after sleep, when displays change and after a macOS update, SnugBar puts
+items back where you arranged them. These checks only write the order file; they never move the pointer.
+
+Before every change to the item order, and before a reset, restore, import or post-update check, SnugBar saves a
+backup (the system positions plus its own sections, order and spacers) and keeps the last 20. Settings > Layout lists
+them with **Restore**, and has **Reset Layout…**.
+
+### Settings
+All settings are one JSON file, `~/Library/Application Support/SnugBar/settings.json`. Settings > General can export
+and import it (a file from a newer SnugBar is refused, and the layout is backed up before an import). The access token
+and Menu Bar folder access are never part of the file. Settings > General also has the menu bar icon style (Chevrons
+or Capsule).
+
+## Permissions
+
+The first time SnugBar starts, a setup window explains each permission, shows whether it's allowed, and opens the
+right place in System Settings. Every page can be skipped; open the setup again from SnugBar's menu (Set Up SnugBar…)
+or Settings > Permissions. A newly allowed permission takes effect without restarting, except Screen Recording, which
+macOS often applies only after a restart (SnugBar offers a Restart button).
+
+| Permission | Used for | Without it |
+|---|---|---|
+| Accessibility (required) | Reading the menu bar and opening items | Reduced mode: only basic hide and show (the icon, shortcuts, and `expand`, `collapse`, `toggle`, `swap`, `zen`, `move`) |
+| Screen Recording (optional) | Pictures of items in the SnugBar Bar and the layout editor | App icons instead; everything else works |
+| Menu Bar folder (optional) | Reordering items without moving the pointer (chosen once in an open panel) | Reordering moves the pointer briefly |
+
+In reduced mode SnugBar's icon shows a warning and its menu starts with "Accessibility Needed…". The SnugBar Bar,
+search, open by letter, the layout editor, the menu bar gestures, and opening Notification Center from the clock while
+items are hidden are unavailable; hidden items show in the menu bar instead. `click` and `order` answer `unavailable`,
+`list` and `search` list the apps SnugBar already knows without live positions, and `status` adds `reducedMode`.
+SnugBar checks Accessibility every few seconds, so allowing or removing it takes effect on its own.
 
 ## Command line, AI agents and links
 
-SnugBar runs one small HTTP server on 127.0.0.1 (port 47811 by default; change the port or turn it off in
-Settings > Control). The `snugbar` command-line tool and MCP clients such as AI agents both connect through it, so
-turning it off stops both; `snugbar://` links don't use it. All three use the same commands:
+SnugBar runs one small HTTP server on 127.0.0.1 (port 47811 by default; change the port or turn it off in Settings >
+Control). The `snugbar` tool and MCP clients both use it; `snugbar://` links don't. All three take the same commands:
 
 | Command | What it does |
 |---|---|
@@ -87,47 +123,44 @@ turning it off stops both; `snugbar://` links don't use it. All three use the sa
 | `zen [on\|off\|toggle]` | Zen mode |
 | `status` | Hiding and arranging methods, permissions, version, port, token |
 
-`<item>` is an item ID from `snugbar list`, an app's bundle ID, or part of an app or item name. When a name matches
-several items, the error lists them with their IDs. `move` takes several items at once (MCP and HTTP: an `items`
-array instead of `item`); SnugBar looks them all up first, and if any isn't found or is ambiguous, nothing moves.
+`<item>` is an item ID from `snugbar list`, an app's bundle ID, or part of an app or item name; when a name matches
+several items, the error lists them. `move` looks every item up first, and if one isn't found or is ambiguous, nothing
+moves.
 
 ### Command-line tool
 
-The tool is inside the app at `SnugBar.app/Contents/Helpers/snugbar`. Settings > Control > Install Command-Line Tool…
-shows the exact commands to link it into your PATH, for example:
+The tool is inside the app at `SnugBar.app/Contents/Helpers/snugbar` (the Homebrew cask links it for you). Settings >
+Control > Install Command-Line Tool… shows the commands to link it into your PATH, for example:
 
 ```sh
 mkdir -p ~/.local/bin && ln -sf /Applications/SnugBar.app/Contents/Helpers/snugbar ~/.local/bin/snugbar
 ```
 
 ```sh
-snugbar list
-snugbar list --section hidden --json
+snugbar list --section hidden
 snugbar move "Some App" alwaysHidden
 snugbar move chat weather hidden      # several apps; the last word is the section
 snugbar click com.example.app
 snugbar zen on
-snugbar --help            # all commands; snugbar <command> --help for one
+snugbar --help                        # snugbar <command> --help for one command
+snugbar --version
 ```
 
-Output is plain text; `--json` prints the server's JSON instead. `--port N` (or `SNUGBAR_PORT`) picks another port;
-otherwise the tool uses the port from SnugBar's settings. Exit status: 0 success, 1 the command failed, 2 usage error,
-3 SnugBar not reachable.
+Output is plain text; `--json` prints the server's JSON. `--port N` (or `SNUGBAR_PORT`) picks another port, otherwise
+the tool reads it from SnugBar's settings. Exit status: 0 success, 1 the command failed, 2 usage error, 3 SnugBar not
+reachable.
 
 ### AI agents (MCP)
 
-The MCP endpoint is `http://127.0.0.1:47811/mcp` (Streamable HTTP with JSON responses). Each command is a tool named
+The endpoint is `http://127.0.0.1:47811/mcp` (Streamable HTTP, JSON responses); each command is a tool named
 `snugbar_<command>`. Settings > Control shows these lines with your port and token, with Copy buttons.
-
-Claude Code:
 
 ```sh
 claude mcp add --transport http snugbar http://127.0.0.1:47811/mcp
 ```
 
-Hermes (`config.yaml`):
-
 ```yaml
+# Hermes (config.yaml)
 mcp_servers:
   snugbar:
     url: http://127.0.0.1:47811/mcp
@@ -135,38 +168,25 @@ mcp_servers:
 
 ### Access token
 
-Off by default. When you turn on "Require an access token" in Settings > Control, SnugBar creates a random token in
-`~/Library/Application Support/SnugBar/token` (readable only by you), and every request must send
-`Authorization: Bearer <token>`. The `snugbar` tool reads the file by itself. For agents, add the header:
-
-```sh
-claude mcp add --transport http snugbar http://127.0.0.1:47811/mcp --header "Authorization: Bearer <token>"
-```
-
-```yaml
-mcp_servers:
-  snugbar:
-    url: http://127.0.0.1:47811/mcp
-    headers:
-      Authorization: Bearer <token>
-```
-
+Off by default. With "Require an access token" on (Settings > Control), SnugBar creates a random token in
+`~/Library/Application Support/SnugBar/token` (readable only by you) and every request must send
+`Authorization: Bearer <token>`. The `snugbar` tool reads the file itself; agents add the header, for example
+`claude mcp add … --header "Authorization: Bearer <token>"`, or `headers: { Authorization: Bearer <token> }` in Hermes.
 Turning the token off stops checking it but keeps the file; "Regenerate" replaces it.
 
 ### HTTP API
 
-`POST /v1/<command>` with a JSON body of string arguments (`item`, `section`, `before`, `after`, `query`, `state`,
-and for `move` an `items` array of strings);
-`GET /v1/status` works too. Every answer is a JSON object with `ok`, and on failure
-`error: {code, message, candidates?}` with codes such as `not_found`, `ambiguous`, `invalid_argument`,
-`unavailable`, `locked` (Zen mode is on) and `unauthorized`.
+`POST /v1/<command>` with a JSON body of string arguments (`item`, `section`, `before`, `after`, `query`, `state`, and
+for `move` an `items` array); `GET /v1/status` works too. Every answer is a JSON object with `ok`, and on failure
+`error: {code, message, candidates?}` with codes such as `not_found`, `ambiguous`, `invalid_argument`, `unavailable`,
+`locked` (Zen mode is on) and `unauthorized`.
 
 ```sh
 curl -s -X POST http://127.0.0.1:47811/v1/move -d '{"item": "com.example.app", "section": "hidden"}'
 ```
 
-The server only listens on 127.0.0.1, only answers requests whose `Host` is `127.0.0.1:<port>` or `localhost:<port>`,
-and refuses requests from web pages (an `Origin` header that isn't a loopback address).
+The server only answers requests whose `Host` is `127.0.0.1:<port>` or `localhost:<port>`, and refuses requests from
+web pages (an `Origin` that isn't a loopback address).
 
 ### Links
 
@@ -174,81 +194,76 @@ and refuses requests from web pages (an `Origin` header that isn't a loopback ad
 snugbar://expand
 snugbar://zen?state=on
 snugbar://click?item=com.example.app
-snugbar://move?item=com.example.app&section=alwaysHidden
-snugbar://move?item=com.example.app&item=com.example.other&section=hidden
 snugbar://move?items=com.example.app,com.example.other&section=hidden
 snugbar://order?item=com.example.app&before=com.example.other
 ```
 
-Links take the same arguments as query parameters. `list`, `search` and `status` links just run (their result isn't
-shown anywhere). The first time another app opens a link that changes something, SnugBar asks whether to allow that
-app and remembers the answer; when it can't tell which app sent the link, it asks every time. Settings > Control >
+Links take the same arguments as query parameters (`move` also accepts `item` several times). `list`, `search` and
+`status` links just run. The first time another app opens a link that changes something, SnugBar asks whether to allow
+that app and remembers the answer; when it can't tell which app sent the link, it asks every time. Settings > Control >
 Links > Reset forgets the answers.
 
-## First run and permissions
+## Updating
 
-The first time SnugBar starts, a short setup window explains each permission, shows whether it is allowed, and has a
-button that opens the right place in System Settings. Each page can be skipped; the setup can be opened again from
-SnugBar's menu (Set Up SnugBar…) or from Settings > Permissions (Show Setup Again…). The status updates by itself while
-the window is open, and a newly allowed permission takes effect without restarting SnugBar (Screen Recording is the
-exception: macOS often applies it only after a restart, so SnugBar offers a Restart button).
+SnugBar updates itself with [Sparkle](https://sparkle-project.org). Once a day it asks GitHub whether a new release is
+out; when one is, it offers to install it and relaunch (if you're busy, it waits quietly as "Update Available" at the
+top of SnugBar's menu). "Check for Updates…" is in SnugBar's menu. To turn automatic checks off, switch off **Check for
+updates automatically** in Settings > General. Updates are signed, and SnugBar checks the signature before installing.
 
-| Permission | Used for | Without it |
-|---|---|---|
-| Accessibility (required) | Reading the menu bar and opening items | Reduced mode: only basic hide and show (the icon, shortcuts, and `expand`, `collapse`, `toggle`, `swap`, `zen`, `move`) |
-| Screen Recording (optional) | Pictures of items in the SnugBar Bar and the layout editor | App icons instead; everything else works |
-| Menu Bar folder (optional) | Reordering items without moving the pointer (chosen once in an open panel) | Reordering moves the pointer briefly |
+## Privacy
 
-In reduced mode SnugBar's icon shows a warning and its menu starts with "Accessibility Needed…". The SnugBar Bar,
-search, open by letter, the layout editor, showing items by clicking, hovering or scrolling on the menu bar, and opening
-Notification Center from the clock while items are hidden are unavailable; hidden items are shown in the menu bar
-instead. `click` and `order` answer with an `unavailable` error, `list` and `search` list the apps SnugBar already knows
-(from its settings and running apps) without live positions, and `status` adds `reducedMode` and an `unavailable` list.
-SnugBar checks Accessibility every few seconds, so allowing or removing it while SnugBar runs takes effect on its own.
+- No telemetry: SnugBar collects no usage data.
+- The only network request SnugBar makes is the optional update check to GitHub, which you can turn off in Settings >
+  General.
+- The control server listens on 127.0.0.1 only, so other machines can't reach it.
+- Item pictures are captured from the menu bar only, kept on this Mac (`~/Library/Caches/app.snugbar.SnugBar`), and
+  never leave it. Settings are one JSON file in `~/Library/Application Support/SnugBar`.
 
-SnugBar collects no usage data and doesn't send anything over the network. Its control server listens on 127.0.0.1
-only, and its settings are one JSON file in `~/Library/Application Support/SnugBar`.
+## Uninstall
 
-## Debug commands
+Quit SnugBar (its menu > Quit SnugBar; the menu bar is whole again at once) and move it to the Trash. To remove its
+data too, delete `~/Library/Application Support/SnugBar`, `~/Library/Caches/app.snugbar.SnugBar` and
+`~/Library/Preferences/app.snugbar.SnugBar.plist`. With Homebrew: `brew uninstall --zap snugbar`.
 
-The app can run one engine command without its menu and write the result as JSON:
+## Build from source
+
+Requirements: macOS 27 and Xcode 27 or later.
+
+```sh
+swift build            # debug build
+swift test             # unit tests
+scripts/build-app.sh   # release build, assembled and signed as build/SnugBar.app
+```
+
+`scripts/build-app.sh` signs ad-hoc unless `SIGN_IDENTITY` is set; `--install` also copies the app to /Applications.
+Packaging, notarization and releases are described in [docs/RELEASING.md](docs/RELEASING.md); contributions in
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+### Debug commands
+
+The app can run one command without its menu bar icon and write the result as JSON (use absolute paths for `--out`):
 
 ```sh
 open -W -n build/SnugBar.app --args --debug status --out /tmp/snugbar-status.json
 ```
 
-Commands: `status`, `list`, `hide <seconds> [bundle ids to keep]`, `click <item>`,
-`move <item> --before <item>` (or `--after`), `capture <dir>`, `order-file`, and `input key|click|move|scroll ...`
-(synthetic events for on-device tests). Use absolute paths for `--out` and `capture`. `hide`, `click`, `move` and
-`input` change the live menu bar or send real input to the frontmost app.
+- Engine: `status`, `list`, `order-file`, `capture <dir>`, `hide <seconds> [bundle ids to keep]`, `click <item>`,
+  `move <item> --before|--after <item>`, `input key|click|move|scroll …`. `hide`, `click`, `move` and `input` change the
+  live menu bar or send real input.
+- Read-only: `fit-plan`, `search <query>`, `letters [--all]`, `bar-items [--all]`, `reconcile --dry-run`, `backups`,
+  `availability --grants <…>`, `permissions`.
+- Offscreen renders, with made-up items or permissions (`--grants none` or a comma list of `accessibility`,
+  `screenRecording`, `orderFile`): `settings-snapshot --pane <name>`, `layout-snapshot --fake`, `bar-snapshot --fake`,
+  `setup-snapshot --step <step>`, `menu-snapshot` (as text) and `menubar-icons` (every icon style and state on light
+  and dark menu bars).
+- `serve --fake --port <N>` runs the real HTTP/MCP server with made-up items and in-memory state, next to an installed
+  SnugBar.
 
-Read-only commands for the SnugBar Bar and search: `fit-plan` (menu bar room, shown widths and what would go to
-"Didn't Fit"), `search <query>` (ranked results), `letters [--all]` (keys for open by letter) and
-`bar-items [--all]` (what the SnugBar Bar lists, per tile, with each item's image source). `--all` includes Always
-Hidden items. An app whose items have no captured image yet gets one tile in the bar; it opens the app's leftmost item.
+No debug command starts the updater, and the offscreen renders never ask for a permission.
 
-`serve --fake --port <N> [--seconds <S>] [--token-file <path>] [--grants <list|none>]` runs the real HTTP/MCP server on 127.0.0.1:N for S
-seconds (default 30) with made-up items and an in-memory state: nothing on screen changes, so it can run next to the
-installed SnugBar. With `--token-file`, requests need the token in that file. The output lists the requests and what
-the fake engine was asked to do.
+## About
 
-Read-only layout commands: `layout-snapshot --fake --out <png> [--dragging]` renders the layout editor offscreen with
-made-up items; `bar-snapshot --fake --out <png> [--dragging] [--onto-other] [--no-access] [--width <pt>]` renders the
-SnugBar Bar the same way (`--dragging`: mid-drag; `--width`: narrow enough to wrap); `settings-snapshot --pane layout --out <png>` renders the Layout settings pane;
-`reconcile --dry-run [--settings <path>] [--trigger <name>] [--explicit] --out <file>` reports what a layout check
-would write (order-file values, spacer positions, ⌘-drag moves for `--explicit`) or why it would skip, without
-writing anything; `backups [--dir <dir>] --out <file>` lists layout backups.
-
-Read-only setup commands, with made-up permissions given as `--grants none` or a comma list of `accessibility`,
-`screenRecording` and `orderFile`: `setup-snapshot --step <welcome|accessibility|screenRecording|menuBarFolder|done>
---grants <...> --out <png>` renders a setup page; `settings-snapshot --pane permissions --grants <...> --out <png>`
-renders the Permissions pane (`--size WxH` for a taller window, `--hover` to show the hover delay slider in General);
-`menu-snapshot --grants <...> --out <txt>` writes SnugBar's menu as text; `availability --grants <...> --out <json>`
-lists what works. `permissions --out <json>` reports the permissions of the copy that runs it. None of them asks for a
-permission.
-
-Captured item images are cached as raw crops in `~/Library/Caches/<bundle id>/ItemImages`; the menu bar background is
-keyed out when they are loaded, so they are drawn as template images in the label colour.
+SnugBar is an independent open-source project, created and maintained by 0sahil. It is not affiliated with Apple.
 
 ## License
 

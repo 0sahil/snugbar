@@ -53,8 +53,21 @@ public final class SettingsStore {
         let header = try JSONDecoder().decode(Header.self, from: data)
         guard let version = header.schemaVersion else { throw SettingsError.missingSchemaVersion }
         guard version <= Settings.currentSchemaVersion else { throw SettingsError.unsupportedSchemaVersion(version) }
-        // Version 1 is the only schema so far; migrations from older versions go here.
-        return try JSONDecoder().decode(Settings.self, from: data)
+        var settings = try JSONDecoder().decode(Settings.self, from: data)
+        SettingsMigration.migrate(&settings, from: version)
+        return settings
+    }
+}
+
+/// Brings settings read from an older schema version up to the current one. Each step only touches what its version
+/// changed; keys a version added are already filled with their defaults by the decoder.
+public enum SettingsMigration {
+    public static func migrate(_ settings: inout Settings, from version: Int) {
+        if version < 2 {
+            // Version 2 added the menu bar icon style. Everyone upgrading keeps the icon they had.
+            settings.menuBarIcon = .chevrons
+        }
+        settings.schemaVersion = Settings.currentSchemaVersion
     }
 }
 

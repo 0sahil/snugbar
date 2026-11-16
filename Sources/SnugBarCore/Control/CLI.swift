@@ -4,6 +4,8 @@ import Foundation
 public enum CLIInvocation: Equatable, Sendable {
     /// Print help: general, or for one command.
     case help(ControlCommand?)
+    /// `--version`: print the tool's version (the app bundle it belongs to) without contacting SnugBar.
+    case version
     case run(CLIOptions)
 }
 
@@ -40,7 +42,7 @@ public struct CLIUsageError: Error, Equatable, Sendable, CustomStringConvertible
 public enum CLIParser {
     public static func parse(_ arguments: [String]) -> Result<CLIInvocation, CLIUsageError> {
         var positional: [String] = []
-        var json = false, help = false
+        var json = false, help = false, version = false
         var port: Int?
         var tokenFile: String?
         var flags: [String: String] = [:]  // command options: section, before, after
@@ -70,6 +72,7 @@ public enum CLIParser {
                 switch name {
                 case "--json": json = true
                 case "-h", "--help": help = true
+                case "--version": version = true
                 case "--port", "-p":
                     let text = try value(name, inline: inline)
                     guard let n = Int(text), (1...65535).contains(n) else {
@@ -91,6 +94,7 @@ public enum CLIParser {
             return .failure(CLIUsageError("\(error)"))
         }
 
+        if version, !help { return .success(.version) }
         guard let first = positional.first else {
             return help ? .success(.help(nil)) : .failure(CLIUsageError("missing command"))
         }
@@ -212,6 +216,7 @@ public enum CLIHelp {
               --json        Print the JSON response instead of text.
               --port N      Connect to port N (default: the port in SnugBar's settings, else \(ControlServerSettings.defaultPort)).
               -h, --help    Show this help. snugbar <command> --help shows help for one command.
+              --version     Show the version of this tool (the SnugBar app it belongs to).
 
             Exit status: 0 success, 1 the command failed, 2 usage error, 3 SnugBar not reachable.
             SnugBar must be running with its control server on (Settings > Control). When an access token is

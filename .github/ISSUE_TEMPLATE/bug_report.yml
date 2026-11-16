@@ -1,0 +1,49 @@
+name: Bug report
+description: Something isn't working
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Move an app to Hidden
+        2. Click SnugBar's icon
+        3. ...
+  - type: input
+    id: version
+    attributes:
+      label: SnugBar version
+      description: Shown in About SnugBar, in Settings > General, or by `snugbar --version`.
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: e.g. macOS 27.1
+    validations:
+      required: true
+  - type: dropdown
+    id: permissions
+    attributes:
+      label: Permissions allowed
+      description: Settings > Permissions shows them.
+      multiple: true
+      options:
+        - Accessibility
+        - Screen Recording
+        - Menu Bar folder
+  - type: textarea
+    id: details
+    attributes:
+      label: Relevant output or settings
+      description: Output of `snugbar status --json`, or the relevant part of ~/Library/Application Support/SnugBar/settings.json. Remove app names you don't want to share.
+      render: text

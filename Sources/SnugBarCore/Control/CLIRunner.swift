@@ -26,12 +26,15 @@ public enum CLIRunner {
         public var writeError: (String) -> Void
         /// Sends one request; replaceable in tests.
         public var send: (URLRequest) -> TransportResult
+        /// The tool's version for `--version`.
+        public var version: () -> String
 
         public init(arguments: [String], environment: [String: String] = ProcessInfo.processInfo.environment,
                     settingsURL: URL = SettingsStore.defaultURL, defaultTokenURL: URL = TokenStore.defaultURL,
                     write: @escaping (String) -> Void = { FileHandle.standardOutput.write(Data($0.utf8)) },
                     writeError: @escaping (String) -> Void = { FileHandle.standardError.write(Data($0.utf8)) },
-                    send: @escaping (URLRequest) -> TransportResult = CLIRunner.urlSessionSend) {
+                    send: @escaping (URLRequest) -> TransportResult = CLIRunner.urlSessionSend,
+                    version: @escaping () -> String = { ProjectInfo.currentExecutableVersion }) {
             self.arguments = arguments
             self.environment = environment
             self.settingsURL = settingsURL
@@ -39,6 +42,7 @@ public enum CLIRunner {
             self.write = write
             self.writeError = writeError
             self.send = send
+            self.version = version
         }
     }
 
@@ -55,6 +59,9 @@ public enum CLIRunner {
             return Exit.usage
         case let .success(.help(command)):
             context.write(command.map(CLIHelp.command) ?? CLIHelp.general)
+            return Exit.ok
+        case .success(.version):
+            context.write("snugbar \(context.version())\n")
             return Exit.ok
         case let .success(.run(o)):
             options = o

@@ -93,7 +93,7 @@ final class FeatureAvailabilityTests: XCTestCase {
         let all = PermissionKind.allCases.flatMap { [$0.title, $0.purpose, $0.withoutIt, $0.buttonTitle] }
             + AppFeature.allCases.map(\.title)
             + [PermissionText.welcome, PermissionText.welcomeDetail, PermissionText.reducedMode, PermissionText.doneIntro,
-               PermissionText.doneChangeLater, PermissionText.privacyTelemetry, PermissionText.privacyServer,
+               PermissionText.doneChangeLater, PermissionText.privacyTelemetry, PermissionText.privacyNetwork, PermissionText.privacyServer,
                PermissionText.privacySettings, PermissionText.layoutEditorNoFolder, PermissionText.noScreenRecordingPictures]
         for text in all {
             XCTAssertFalse(text.contains("!"), text)

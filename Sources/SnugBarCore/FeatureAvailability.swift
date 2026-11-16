@@ -262,7 +262,9 @@ public enum PermissionText {
     /// Where the SnugBar Bar and layout editor say pictures need Screen Recording.
     public static let noScreenRecordingPictures = "App icons are shown because SnugBar doesn’t have Screen Recording permission."
 
-    public static let privacyTelemetry = "SnugBar collects no usage data and doesn’t send anything over the network."
+    public static let privacyTelemetry = "SnugBar collects no usage data and has no telemetry."
+    /// Feature 58: the update check is the only network request.
+    public static let privacyNetwork = "The only network request SnugBar makes is the optional update check to GitHub, which you can turn off in Settings > General."
     public static let privacyServer = "The control server for the command line and MCP accepts connections from this Mac only (127.0.0.1)."
     public static let privacySettings = "Settings are kept in one JSON file on this Mac."
 }

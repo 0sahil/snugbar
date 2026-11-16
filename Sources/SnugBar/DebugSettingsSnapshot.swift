@@ -4,7 +4,10 @@ import SnugBarCore
 /// `settings-snapshot --pane <name> --out <png> [--server-off] [--grants <list|none>] [--hover] [--size WxH]
 /// [--appearance light|dark]`: renders the Settings window (the same window setup as the app's) offscreen with default
 /// settings at 760×520 (or `--size`) and writes a PNG; the JSON goes beside it. `--grants` fakes the permissions
-/// (default: all granted); `--hover` turns on "Resting the pointer on the menu bar" so its slider shows. Nothing is started: no status item, no hiding, no server, no hotkeys, and neither the settings
+/// (default: all granted); `--hover` turns on "Resting the pointer on the menu bar" so its slider shows;
+/// `--icon-style` picks the menu bar icon style; `--updates-off` shows automatic update checks turned off (the updater
+/// is a preview that never starts Sparkle). Nothing is started: no status item, no hiding, no server, no hotkeys, no
+/// update check, and neither the settings
 /// file, the token file, the order file nor the remembered pane is read or written.
 extension DebugRunner {
     struct SettingsSnapshotResult: Encodable {
@@ -34,13 +37,17 @@ extension DebugRunner {
     }
 
     func settingsSnapshot() async throws -> SettingsSnapshotResult {
-        let usage = "usage: settings-snapshot --pane <\(SettingsPane.allCases.map(\.rawValue).joined(separator: "|"))> --out <png> [--server-off] [--grants <list|none>] [--hover] [--size WxH] [--appearance light|dark]"
+        let usage = "usage: settings-snapshot --pane <\(SettingsPane.allCases.map(\.rawValue).joined(separator: "|"))> --out <png> [--server-off] [--grants <list|none>] [--hover] [--icon-style chevrons|capsule] [--updates-off] [--size WxH] [--appearance light|dark]"
         guard let name = invocation.value(after: "--pane"), let pane = SettingsPane(name: name) else { throw Failure(usage) }
         guard let out = invocation.outputURL else { throw Failure(usage) }
 
         var settings = SnugBarCore.Settings.default
         settings.controlServer.enabled = !invocation.arguments.contains("--server-off")
         if invocation.arguments.contains("--hover") { settings.reveal.hover = true }
+        if let name = invocation.value(after: "--icon-style") {
+            guard let style = MenuBarIconStyle(rawValue: name) else { throw Failure(usage) }
+            settings.menuBarIcon = style
+        }
         let grants = try grants(required: false) ?? .all
         let controller = AppController(preview: settings, grants: grants)
         var size = SettingsWindow.defaultContentSize
@@ -62,7 +69,9 @@ extension DebugRunner {
         case "light": window.appearance = NSAppearance(named: .aqua)
         default: break
         }
-        SettingsWindow.configure(window, controller: controller, control: control, navigation: navigation)
+        // A preview updater: shows the update controls, never starts Sparkle or checks anything.
+        let updater = Updater(previewAutomaticChecks: !invocation.arguments.contains("--updates-off"))
+        SettingsWindow.configure(window, controller: controller, control: control, updater: updater, navigation: navigation)
         window.setContentSize(size)
         // Far outside every screen, so nothing appears; ordered in so SwiftUI lays out the toolbar and split view.
         window.setFrameOrigin(NSPoint(x: -30000, y: -30000))
@@ -112,7 +121,7 @@ extension DebugRunner {
 
         let split = Self.firstSplitView(in: content)
         let contentSize = window.contentRect(forFrameRect: window.frame).size
-        return withExtendedLifetime((controller, control, navigation)) {
+        return withExtendedLifetime((controller, control, navigation, updater)) {
             SettingsSnapshotResult(
                 pane: pane.rawValue,
                 image: out.path,

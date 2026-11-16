@@ -39,7 +39,7 @@ final class SettingsStoreTests: XCTestCase {
         let url = dir.appendingPathComponent("settings.json")
         try SettingsStore(url: url).save(sample)
         let json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
-        XCTAssertEqual(json?["schemaVersion"] as? Int, 1)
+        XCTAssertEqual(json?["schemaVersion"] as? Int, Settings.currentSchemaVersion)
         XCTAssertEqual(json?["hider"] as? String, "overflowDivider")
         let sections = json?["sections"] as? [String: Any]
         XCTAssertEqual((sections?["apps"] as? [String: String])?[Fixtures.chat], "alwaysHidden")
@@ -75,9 +75,10 @@ final class SettingsStoreTests: XCTestCase {
     func testNewerSchemaIsRejected() throws {
         let url = dir.appendingPathComponent("settings.json")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try Data(#"{"schemaVersion": 2, "hider": "automatic"}"#.utf8).write(to: url)
+        let newer = Settings.currentSchemaVersion + 1
+        try Data(#"{"schemaVersion": \#(newer), "hider": "automatic"}"#.utf8).write(to: url)
         XCTAssertThrowsError(try SettingsStore(url: url).load()) {
-            XCTAssertEqual($0 as? SettingsError, .unsupportedSchemaVersion(2))
+            XCTAssertEqual($0 as? SettingsError, .unsupportedSchemaVersion(newer))
         }
     }
 

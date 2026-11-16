@@ -16,6 +16,10 @@ let package = Package(
         // case-insensitive volume; build-app.sh puts it in the app as Contents/Helpers/snugbar.
         .executable(name: "snugbar-cli", targets: ["SnugBarCLI"]),
     ],
+    dependencies: [
+        // In-app updates. Linked into the app target only; build-app.sh embeds the framework.
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.1"),
+    ],
     targets: [
         .target(
             name: "SnugBarCore"
@@ -33,7 +37,11 @@ let package = Package(
         ),
         .executableTarget(
             name: "SnugBar",
-            dependencies: ["SnugBarCore", "SnugBarEngine"]
+            dependencies: [
+                "SnugBarCore",
+                "SnugBarEngine",
+                .product(name: "Sparkle", package: "Sparkle"),
+            ]
         ),
         .executableTarget(
             name: "SnugBarCLI",

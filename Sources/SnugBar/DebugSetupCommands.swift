@@ -111,18 +111,38 @@ extension DebugRunner {
     }
 
     func menuSnapshot() throws -> MenuSnapshotResult {
-        guard let out = invocation.outputURL else { throw Failure("usage: menu-snapshot --grants <list|none> --out <txt>") }
+        let usage = "usage: menu-snapshot --grants <list|none> [--update-available <version>] --out <txt>"
+        guard let out = invocation.outputURL else { throw Failure(usage) }
         let grants = try grants() ?? .none
         let controller = AppController(preview: .default, grants: grants)
-        let menu = StatusMenu.build(controller: controller) {}
+        // A preview updater: never started, so nothing is checked; `--update-available` fakes a found update.
+        let updater = Updater(previewAutomaticChecks: true, pendingUpdateVersion: invocation.value(after: "--update-available"))
+        let menu = StatusMenu.build(controller: controller, updater: updater, openSettings: {}, openAbout: {})
         // Validation as AppKit does it when the menu opens: closure items are enabled unless set otherwise.
         menu.update()
-        let entries = menu.items.map { item -> MenuSnapshotResult.Entry in
+        let entries = Self.entries(menu)
+        // The app menu (key equivalents in SnugBar's windows), validated the same way.
+        let appMenu = AppMenu.build(updater: updater, about: {}, settings: {}).items.first?.submenu ?? NSMenu()
+        appMenu.update()
+        var lines = ["SnugBar menu, grants: \(grants.listDescription)"]
+        lines += Self.lines(entries)
+        lines += ["", "App menu"] + Self.lines(Self.entries(appMenu))
+        let text = lines.joined(separator: "\n") + "\n"
+        try FileManager.default.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(text.utf8).write(to: out, options: .atomic)
+        return withExtendedLifetime(controller) { MenuSnapshotResult(text: out.path, grants: grants.listDescription, entries: entries) }
+    }
+
+    private static func entries(_ menu: NSMenu) -> [MenuSnapshotResult.Entry] {
+        menu.items.map { item in
             .init(title: item.title, separator: item.isSeparatorItem, enabled: item.isEnabled,
                   state: item.state == .on ? "on" : nil, subtitle: item.subtitle,
                   keyEquivalent: item.keyEquivalent.isEmpty ? nil : item.keyEquivalent)
         }
-        var lines = ["SnugBar menu, grants: \(grants.listDescription)"]
+    }
+
+    private static func lines(_ entries: [MenuSnapshotResult.Entry]) -> [String] {
+        var lines: [String] = []
         for e in entries {
             if e.separator { lines.append("----"); continue }
             var line = (e.state == "on" ? "[x] " : "    ") + e.title
@@ -131,10 +151,7 @@ extension DebugRunner {
             lines.append(line)
             if let subtitle = e.subtitle { lines.append("        " + subtitle) }
         }
-        let text = lines.joined(separator: "\n") + "\n"
-        try FileManager.default.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data(text.utf8).write(to: out, options: .atomic)
-        return withExtendedLifetime(controller) { MenuSnapshotResult(text: out.path, grants: grants.listDescription, entries: entries) }
+        return lines
     }
 
     // MARK: - availability

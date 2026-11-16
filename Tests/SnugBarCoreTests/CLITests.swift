@@ -298,6 +298,24 @@ final class CLIRunnerTests: XCTestCase {
         XCTAssertTrue(sent.isEmpty)
     }
 
+    func testVersionPrintsWithoutSending() {
+        var context = CLIRunner.Context(
+            arguments: ["--version"], environment: [:], write: { self.out += $0 }, writeError: { self.err += $0 },
+            send: { request in self.sent.append(request); return .failed("unused") }, version: { "1.0.0 (42)" }
+        )
+        XCTAssertEqual(CLIRunner.run(context), 0)
+        XCTAssertEqual(out, "snugbar 1.0.0 (42)\n")
+        XCTAssertTrue(sent.isEmpty)
+        XCTAssertTrue(err.isEmpty)
+        // Anywhere on the line, also with a command; --help wins.
+        XCTAssertEqual(CLIParser.parse(["status", "--version"]), .success(.version))
+        XCTAssertEqual(CLIParser.parse(["--version", "--help"]), .success(.help(nil)))
+        context.arguments = ["--help"]
+        out = ""
+        _ = CLIRunner.run(context)
+        XCTAssertTrue(out.contains("--version"))
+    }
+
     func testGarbageAnswerExits1() {
         XCTAssertEqual(run(["status"], answer: .response(status: 200, body: Data("<html>".utf8))), 1)
         XCTAssertTrue(err.contains("unexpected answer"))

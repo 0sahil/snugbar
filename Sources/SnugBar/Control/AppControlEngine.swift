@@ -84,4 +84,10 @@ enum AppInfo {
     static var version: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
     }
+
+    /// "1.0.0 (42)": the version and the build number.
+    static var fullVersion: String {
+        ProjectInfo.versionString(short: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+                                  build: Bundle.main.infoDictionary?["CFBundleVersion"] as? String)
+    }
 }

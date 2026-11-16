@@ -19,9 +19,11 @@ public enum RevealDestination: String, Codable, CaseIterable, Sendable {
 }
 
 /// SnugBar's settings file. Unknown keys are ignored and missing keys take their defaults, so older and newer
-/// files of the same schema version load.
+/// files of the same schema version load. Files of an older schema version are migrated when they are read
+/// (`SettingsMigration`).
 public struct Settings: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = 1
+    /// 2: `menuBarIcon` added.
+    public static let currentSchemaVersion = 2
 
     public var schemaVersion: Int
     public var sections: AppSectionMap
@@ -52,6 +54,8 @@ public struct Settings: Codable, Equatable, Sendable {
     /// The setup window was finished or closed (feature 85). Nil in files from before it existed: see
     /// `SetupLaunchDecision`. Not taken over from an imported file (it belongs to this Mac).
     public var setupCompleted: Bool?
+    /// The look of SnugBar's icon in the menu bar.
+    public var menuBarIcon: MenuBarIconStyle
 
     public init(
         schemaVersion: Int = Settings.currentSchemaVersion,
@@ -69,7 +73,8 @@ public struct Settings: Codable, Equatable, Sendable {
         urlScheme: URLSchemeSettings = URLSchemeSettings(),
         layout: DesiredLayout = DesiredLayout(),
         lastSystemBuild: String? = nil,
-        setupCompleted: Bool? = nil
+        setupCompleted: Bool? = nil,
+        menuBarIcon: MenuBarIconStyle = .default
     ) {
         self.schemaVersion = schemaVersion
         self.sections = sections
@@ -87,6 +92,7 @@ public struct Settings: Codable, Equatable, Sendable {
         self.layout = layout
         self.lastSystemBuild = lastSystemBuild
         self.setupCompleted = setupCompleted
+        self.menuBarIcon = menuBarIcon
     }
 
     /// A fresh install: every third-party app hidden, no hotkeys, no personal data.
@@ -97,6 +103,7 @@ public struct Settings: Codable, Equatable, Sendable {
         case revealIn, moveItemsThatDontFit, recentItems
         case controlServer, urlScheme
         case layout, lastSystemBuild, setupCompleted
+        case menuBarIcon
     }
 
     public init(from decoder: Decoder) throws {
@@ -117,6 +124,7 @@ public struct Settings: Codable, Equatable, Sendable {
         layout = try c.decodeIfPresent(DesiredLayout.self, forKey: .layout) ?? DesiredLayout()
         lastSystemBuild = try c.decodeIfPresent(String.self, forKey: .lastSystemBuild)
         setupCompleted = try c.decodeIfPresent(Bool.self, forKey: .setupCompleted)
+        menuBarIcon = try c.decodeIfPresent(MenuBarIconStyle.self, forKey: .menuBarIcon) ?? .default
     }
 
     /// Records that an item was opened: it moves to the front of `recentItems`, which keeps `RecentItems.limit`.

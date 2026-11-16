@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- SnugBar is not sandboxed (the sandbox blocks reading other apps' menu bar items) and needs no hardened-runtime
+       exceptions:
+       - MenuBarClientCore is loaded with dlopen from /System/Library/PrivateFrameworks. It is a platform binary, which
+         library validation always allows, so com.apple.security.cs.disable-library-validation is not needed.
+       - Sparkle.framework is embedded and signed with the same identity as the app.
+       - Accessibility, Screen Recording (ScreenCaptureKit) and synthetic events are granted through privacy settings
+         (TCC), not entitlements. SnugBar sends no Apple events, so it needs no automation entitlement.
+       - The control server listens on 127.0.0.1; outside the sandbox no network entitlement applies. -->
+</dict>
+</plist>

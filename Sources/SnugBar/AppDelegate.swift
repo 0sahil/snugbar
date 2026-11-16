@@ -10,13 +10,17 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     static let autosaveName = "snugbar.icon"
 
     private let controller: AppController
+    private let updater: Updater
     private let openSettings: () -> Void
+    private let openAbout: () -> Void
     private var item: NSStatusItem?
     private var cancellables: Set<AnyCancellable> = []
 
-    init(controller: AppController, openSettings: @escaping () -> Void) {
+    init(controller: AppController, updater: Updater, openSettings: @escaping () -> Void, openAbout: @escaping () -> Void) {
         self.controller = controller
+        self.updater = updater
         self.openSettings = openSettings
+        self.openAbout = openAbout
         super.init()
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.autosaveName = Self.autosaveName
@@ -41,26 +45,17 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         controller.$accessibilityGranted.removeDuplicates()
             .sink { [weak self] _ in self?.updateIcon(state: controller.state, hasError: controller.lastError != nil) }
             .store(in: &cancellables)
+        // The style changes live. `$settings` publishes before the value is stored, so read it on the next turn.
+        controller.$settings.map(\.menuBarIcon).removeDuplicates().dropFirst()
+            .sink { [weak self] _ in
+                DispatchQueue.main.async { self?.updateIcon(state: controller.state, hasError: controller.lastError != nil) }
+            }
+            .store(in: &cancellables)
     }
 
     private func updateIcon(state: BarState, hasError: Bool) {
-        let symbol: String
-        if !controller.accessibilityGranted || hasError {
-            symbol = "exclamationmark.triangle"
-        } else if state.zen {
-            symbol = "eye.slash"
-        } else if state.swapped && state.reveal == .collapsed {
-            symbol = "arrow.left.arrow.right"
-        } else {
-            switch state.reveal {
-            case .collapsed: symbol = "chevron.left"
-            case .expanded: symbol = "chevron.right"
-            case .all: symbol = "chevron.right.2"
-            }
-        }
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "SnugBar")
-        image?.isTemplate = true
-        item?.button?.image = image
+        let iconState = MenuBarIconState.resolve(state, accessibilityGranted: controller.accessibilityGranted, hasError: hasError)
+        item?.button?.image = MenuBarIconRenderer.image(controller.settings.menuBarIcon, iconState)
         if !controller.accessibilityGranted {
             item?.button?.toolTip = "SnugBar needs Accessibility permission. Right-click for the menu."
         } else if state.zen {
@@ -92,7 +87,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     private func buildMenu() -> NSMenu {
-        StatusMenu.build(controller: controller, openSettings: openSettings)
+        StatusMenu.build(controller: controller, updater: updater, openSettings: openSettings, openAbout: openAbout)
     }
 }
 
@@ -100,12 +95,19 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 /// on its own for `--debug menu-snapshot`.
 @MainActor
 enum StatusMenu {
-    static func build(controller c: AppController, openSettings: @escaping () -> Void) -> NSMenu {
+    static func build(controller c: AppController, updater: Updater, openSettings: @escaping () -> Void,
+                      openAbout: @escaping () -> Void) -> NSMenu {
         let menu = NSMenu()
         // Enabled states are set here (Zen, permissions); automatic validation would enable every closure item.
         menu.autoenablesItems = false
         let state = c.state
         let availability = c.availability
+
+        // An update a scheduled check found, waiting quietly until the user chooses it.
+        if let version = updater.pendingUpdateVersion {
+            menu.addItem(entry("Update Available: \(version)…") { updater.checkForUpdates() })
+            menu.addItem(.separator())
+        }
 
         // Reduced mode (feature 87): the way to full mode comes first.
         if !availability.grants.accessibility {
@@ -160,6 +162,11 @@ enum StatusMenu {
         let login = entry("Launch at Login") { c.setLaunchAtLogin(!c.loginItemEnabled) }
         login.state = c.loginItemEnabled ? .on : .off
         menu.addItem(login)
+        menu.addItem(.separator())
+        menu.addItem(entry("About SnugBar") { openAbout() })
+        if updater.isAvailable {
+            menu.addItem(CheckForUpdatesMenuItem(updater: updater))
+        }
         menu.addItem(.separator())
         menu.addItem(entry("Quit SnugBar", keyEquivalent: "q") { NSApp.terminate(nil) })
         return menu
@@ -223,6 +230,7 @@ final class ClosureMenuItem: NSMenuItem {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let controller = AppController()
+    private let updater = Updater()
     private lazy var control = ControlSurface(controller: controller)
     private var statusItem: StatusItemController?
     private var settingsWindow: NSWindow?
@@ -244,11 +252,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let settingsFileExisted = FileManager.default.fileExists(atPath: SettingsStore.defaultURL.path)
-        statusItem = StatusItemController(controller: controller) { [weak self] in self?.showSettings() }
+        statusItem = StatusItemController(
+            controller: controller, updater: updater,
+            openSettings: { [weak self] in self?.showSettings() }, openAbout: { [weak self] in self?.showAbout() }
+        )
+        updater.activate = { [weak self] in self?.activateForOwnWindow() }
+        AppMenu.install(updater: updater, about: { [weak self] in self?.showAbout() },
+                        settings: { [weak self] in self?.showSettings() })
         controller.openLayoutEditor = { [weak self] in self?.showLayoutEditor() }
         controller.openSetup = { [weak self] step in self?.setup.show(step: step) }
         controller.start()
         control.start()
+        // After everything else is up; never in a --debug run (those don't reach this delegate).
+        updater.start()
         handleTerminationSignals()
         // Activations during launch are not the user asking for the window.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.didFinishLaunching = true }
@@ -270,10 +286,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Every quit ends here: the menu's Quit, ⌘Q, SIGTERM/SIGINT, Restart, and Sparkle's "Install and Relaunch" (its
+    /// installer asks the app to quit and waits for the process to exit before replacing the bundle). The control
+    /// server stops listening and the hide is lifted (the system would also end it when the process exits).
     func applicationWillTerminate(_ notification: Notification) {
         control.stop()
         controller.stop()
     }
+
+    private func showAbout() {
+        AboutPanel.show { activateForOwnWindow() }
+    }
+
+    /// Activates SnugBar for a window that isn't Settings (About, Sparkle's), so the activation doesn't also open
+    /// Settings (see `applicationDidBecomeActive`).
+    private func activateForOwnWindow() {
+        ownActivationAt = Date()
+        NSApp.activate()
+    }
+
+    /// When SnugBar last activated itself for About or an update window.
+    private var ownActivationAt = Date.distantPast
 
     /// Identifies the sending app (its pid from the event, then its bundle ID) so consent can be remembered per app.
     @objc private func handleGetURL(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
@@ -304,7 +337,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // for the window, so wait a moment to see whether a link came with this activation.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self, Date().timeIntervalSince(self.lastLinkAt) > 1.5, self.settingsWindow?.isVisible != true,
-                  !self.layoutEditor.isVisible, !self.setup.isVisible else { return }
+                  !self.layoutEditor.isVisible, !self.setup.isVisible,
+                  Date().timeIntervalSince(self.ownActivationAt) > 1.5,
+                  // Another titled window of SnugBar's is up (the About panel, Sparkle's update window).
+                  !NSApp.windows.contains(where: { $0.isVisible && $0.styleMask.contains(.titled) }) else { return }
             self.showSettings()
         }
     }
@@ -320,7 +356,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 contentRect: NSRect(origin: .zero, size: SettingsWindow.defaultContentSize),
                 styleMask: SettingsWindow.styleMask, backing: .buffered, defer: false
             )
-            SettingsWindow.configure(window, controller: controller, control: control, navigation: settingsNavigation)
+            SettingsWindow.configure(window, controller: controller, control: control, updater: updater,
+                                     navigation: settingsNavigation)
             window.setFrameAutosaveName(SettingsWindow.autosaveName)
             if window.setFrameUsingName(SettingsWindow.autosaveName) {
                 // A frame saved by the older, narrower tabbed window is grown to the new minimum.

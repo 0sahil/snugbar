@@ -28,6 +28,7 @@ struct SettingsView: View {
 
     @ObservedObject var controller: AppController
     @ObservedObject var control: ControlSurface
+    @ObservedObject var updater: Updater
     @ObservedObject var navigation: SettingsNavigation
 
     var body: some View {
@@ -46,7 +47,7 @@ struct SettingsView: View {
     @ViewBuilder
     private func pane(_ pane: SettingsPane) -> some View {
         switch pane {
-        case .general: GeneralSettings(controller: controller)
+        case .general: GeneralSettings(controller: controller, updater: updater)
         case .sections: SectionsSettings(controller: controller)
         case .layout: LayoutSettings(controller: controller)
         case .shortcuts: ShortcutSettings(controller: controller)
@@ -80,8 +81,10 @@ enum SettingsWindow {
     static let defaultContentSize = NSSize(width: 760, height: 520)
     static let autosaveName = "SnugBarSettings"
 
-    static func configure(_ window: NSWindow, controller: AppController, control: ControlSurface, navigation: SettingsNavigation) {
-        let hosting = NSHostingController(rootView: SettingsView(controller: controller, control: control, navigation: navigation))
+    static func configure(_ window: NSWindow, controller: AppController, control: ControlSurface, updater: Updater,
+                          navigation: SettingsNavigation) {
+        let hosting = NSHostingController(rootView: SettingsView(controller: controller, control: control, updater: updater,
+                                                                 navigation: navigation))
         // The toolbar (sidebar look, no sidebar toggle) and the title come from the SwiftUI view.
         hosting.sceneBridgingOptions = [.title, .toolbars]
         window.contentViewController = hosting
@@ -105,6 +108,7 @@ private func setting<T>(_ controller: AppController, _ path: WritableKeyPath<Snu
 
 private struct GeneralSettings: View {
     @ObservedObject var controller: AppController
+    @ObservedObject var updater: Updater
 
     var body: some View {
         Form {
@@ -113,6 +117,12 @@ private struct GeneralSettings: View {
                 if !controller.settings.showIcon {
                     Text(noIconHint).font(.callout).foregroundStyle(.secondary)
                 }
+                Picker("Menu bar icon", selection: setting(controller, \.menuBarIcon)) {
+                    ForEach(MenuBarIconStyle.allCases) { style in
+                        MenuBarIconStyleLabel(style: style).tag(style)
+                    }
+                }
+                .pickerStyle(.radioGroup)
                 Toggle("Launch at login", isOn: Binding(
                     get: { controller.loginItemEnabled }, set: { controller.setLaunchAtLogin($0) }
                 ))
@@ -187,6 +197,27 @@ private struct GeneralSettings: View {
             }
 
             Section {
+                Toggle("Check for updates automatically", isOn: Binding(
+                    get: { updater.automaticallyChecksForUpdates }, set: { updater.automaticallyChecksForUpdates = $0 }
+                ))
+                .disabled(!updater.isAvailable)
+                LabeledContent("Version") {
+                    HStack {
+                        Text(AppInfo.fullVersion).monospacedDigit().textSelection(.enabled)
+                        Button("Check Now") { updater.checkForUpdates() }
+                            .disabled(!updater.canCheckForUpdates)
+                    }
+                }
+            } header: {
+                Text("Updates")
+            } footer: {
+                Text(updater.isAvailable
+                     ? "SnugBar asks GitHub once a day whether a new version is out. This is the only network request it makes."
+                     : "This copy of SnugBar wasn’t built as an app with an update feed, so it doesn’t check for updates.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+
+            Section {
                 HStack {
                     Text(SettingsStore.defaultURL.path(percentEncoded: false)).font(.callout).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
@@ -248,6 +279,31 @@ private struct GeneralSettings: View {
         if controller.settings.reveal.clickEmptyBar { ways.append("click an empty part of the menu bar") }
         let how = ways.isEmpty ? "Set a shortcut first, or you can only reveal items from this window." : "To show hidden items, \(ways.joined(separator: " or "))."
         return how + " Open SnugBar again from Applications to get back here."
+    }
+}
+
+/// A row of the "Menu bar icon" picker: the style's collapsed and expanded glyphs, then its name.
+private struct MenuBarIconStyleLabel: View {
+    let style: MenuBarIconStyle
+
+    var body: some View {
+        HStack(spacing: 6) {
+            HStack(spacing: 2) {
+                glyph(.collapsed)
+                glyph(.expanded)
+            }
+            .accessibilityHidden(true)
+            Text(style.title)
+        }
+    }
+
+    private func glyph(_ state: MenuBarIconState) -> some View {
+        Group {
+            if let image = MenuBarIconRenderer.image(style, state) {
+                Image(nsImage: image).renderingMode(.template)
+            }
+        }
+        .frame(width: 18, height: 18)
     }
 }
 
@@ -608,6 +664,7 @@ private struct PermissionSettings: View {
             }
             Section("Privacy") {
                 Text(PermissionText.privacyTelemetry)
+                Text(PermissionText.privacyNetwork)
                 Text(PermissionText.privacyServer)
                 HStack {
                     Text(PermissionText.privacySettings)

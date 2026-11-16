@@ -69,7 +69,7 @@ struct DebugRunner {
         return Self.imageCommands.contains(invocation.command) ? out.deletingPathExtension().appendingPathExtension("json") : out
     }
 
-    static let imageCommands: Set<String> = ["settings-snapshot", "layout-snapshot", "bar-snapshot", "setup-snapshot", "menu-snapshot"]
+    static let imageCommands: Set<String> = ["settings-snapshot", "layout-snapshot", "bar-snapshot", "setup-snapshot", "menu-snapshot", "menubar-icons"]
 
     func run() async -> Int32 {
         let started = Date()
@@ -133,8 +133,9 @@ struct DebugRunner {
         case "menu-snapshot": return try menuSnapshot()
         case "availability": return try availabilityReport()
         case "permissions": return permissionsReport()
+        case "menubar-icons": return try menuBarIcons()
         default:
-            throw Failure("unknown command '\(invocation.command)'; use status, list, hide, click, move, capture, order-file, input, fit-plan, search, letters, bar-items, key-images, serve, settings-snapshot, layout-snapshot, bar-snapshot, reconcile, backups, setup-snapshot, menu-snapshot, availability or permissions")
+            throw Failure("unknown command '\(invocation.command)'; use status, list, hide, click, move, capture, order-file, input, fit-plan, search, letters, bar-items, key-images, serve, settings-snapshot, layout-snapshot, bar-snapshot, reconcile, backups, setup-snapshot, menu-snapshot, availability, permissions or menubar-icons")
         }
     }
 
