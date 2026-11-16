@@ -33,11 +33,13 @@ extension DebugRunner {
         let own = Bundle.main.bundleIdentifier ?? "app.snugbar.SnugBar"
         var live: [MenuBarItem] = []
         var problem: String?
+        var indicator = false
         let positions = try? orderFile.readPositions()
         if Permissions.accessibility {
             let snap = reader.snapshot(orderPositions: positions)
             live = snap.items
             problem = snap.problem
+            indicator = snap.overflowIndicatorFrame != nil
         } else {
             problem = "accessibility not granted: no live items; hidden items come from known apps only"
         }
@@ -46,7 +48,8 @@ extension DebugRunner {
         let shown = VisibilityPlanner.collapsedVisibleApps(state: .initial, sections: settings.sections, candidates: candidates, excluding: [own])
         var measurements = FitMeasurements()
         measurements.record(live, excluding: [own], isOnScreen: { shown.contains($0) })
-        let analysis = FitAnalysis.make(items: live, measurements: measurements, shownApps: shown, ownBundleID: own)
+        let analysis = FitAnalysis.make(items: live, measurements: measurements, shownApps: shown, ownBundleID: own,
+                                        isOnScreen: { shown.contains($0) }, overflowIndicator: indicator)
         let overflow: Set<String> = settings.moveItemsThatDontFit ? Set(analysis.plan?.moved ?? []) : []
         let items = ItemCatalog().merged(live: live, running: running, knownApps: settings.knownApps)
             .filter { $0.ownerBundleID != own }
@@ -88,11 +91,34 @@ extension DebugRunner {
         var space: MenuBarSpace?
         var fixedWidth: Double
         var fixedItemCount: Int
-        var itemSpacing: Double
+        /// Median gap between Apple's items (information only).
+        var appleGap: Double
+        /// What the estimate uses: required = fixedSpan + app widths + junctionGap + thirdPartyGap per boundary
+        /// between third-party items + margin.
+        var fixedSpan: Double
+        var thirdPartyGap: Double
+        var junctionGap: Double
+        /// Shown third-party items sitting between fixed items (left out of `fixedSpan`, counted with their apps).
+        var insideWidth: Double
+        /// Items left out of the span and gap measurement, and why (overflowed, behindNotch, noWidth, notAllowed,
+        /// notPlanned, appOverflowed, overlaps, unknownOwner).
+        var ignoredForMeasurement: [FitSurvey.Ignored]
+        /// macOS's overflow in the snapshot: the « button, shown apps with items in it (or behind the notch), and
+        /// overflowed items without an owner.
+        var overflowIndicator: Bool
+        var overflowedApps: [String]
+        var unattributedOverflow: Int
+        /// Shown apps counted with remembered widths because they are let through but missing from the tree (the
+        /// running app only: this process remembers nothing).
+        var offBar: [String]
         /// Shown apps considered, left to right.
         var shownApps: [App]
         var unmeasured: [String]
         var plan: FitPlanner.Plan?
+        /// Whether the safety net (macOS's overflow in use while the plan says everything fits) would fire now, and
+        /// which app it would move. Assumes the bar has settled and nothing is out for room yet.
+        var safetyNetWouldFire: Bool
+        var safetyNet: String
         /// Apps that would be listed under "Didn't fit" (empty when the setting is off).
         var wouldMoveToDidntFit: [App]
     }
@@ -105,18 +131,33 @@ extension DebugRunner {
                                  primary: strip.isPrimary)
         }
         let apps = c.analysis.apps.map { FitPlanResult.App(bundleID: $0.bundleID, name: c.appName($0.bundleID), width: $0.width, items: $0.itemCount) }
+        let survey = c.analysis.check.survey
+        let verdict = FitSafetyNet.verdict(survey: survey, plan: c.analysis.plan, movedNow: [], settled: true, userBusy: false)
+        var overflow = c.overflow
+        if case let .fire(app) = verdict, c.settings.moveItemsThatDontFit { overflow.insert(app) }
         return FitPlanResult(
             moveItemsThatDontFit: c.settings.moveItemsThatDontFit,
             problem: c.problem,
             screens: screens,
             space: c.analysis.space,
-            fixedWidth: c.analysis.fixedWidth,
-            fixedItemCount: c.analysis.fixedItemCount,
-            itemSpacing: c.analysis.itemSpacing,
+            fixedWidth: survey.fixedWidth,
+            fixedItemCount: survey.fixedItemCount,
+            appleGap: survey.appleGap,
+            fixedSpan: survey.geometry.fixedSpan,
+            thirdPartyGap: survey.geometry.thirdPartyGap,
+            junctionGap: survey.geometry.junctionGap,
+            insideWidth: survey.geometry.insideWidth,
+            ignoredForMeasurement: survey.ignored,
+            overflowIndicator: survey.overflowIndicator,
+            overflowedApps: survey.overflowedApps,
+            unattributedOverflow: survey.unattributedOverflow,
+            offBar: c.analysis.check.offBar,
             shownApps: apps,
             unmeasured: c.analysis.unmeasured,
             plan: c.analysis.plan,
-            wouldMoveToDidntFit: apps.filter { c.overflow.contains($0.bundleID) }
+            safetyNetWouldFire: { if case .fire = verdict { return true } else { return false } }(),
+            safetyNet: verdict.label,
+            wouldMoveToDidntFit: apps.filter { overflow.contains($0.bundleID) }
         )
     }
 

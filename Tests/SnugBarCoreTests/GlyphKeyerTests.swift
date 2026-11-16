@@ -210,4 +210,68 @@ final class GlyphKeyerTests: XCTestCase {
         XCTAssertEqual(twice.bitmap, once.bitmap)
         XCTAssertEqual(twice.isTemplate, once.isTemplate)
     }
+
+    // MARK: - The menu bar's edge caught in a crop
+
+    /// A capture as the menu bar gives it at 2x: 44×66 px of dark bar with a 16×14 px glyph in the middle, plus
+    /// horizontal lines (`rows`, from `x0` to `x1`) in a faint grey like the bar's top highlight.
+    private func capture(lines: [Int] = [], x0: Int = 0, x1: Int = 44, glyphRows: Range<Int> = 26..<40,
+                         lineColour: Pixel = (90, 90, 92, 255)) -> GlyphKeyer.Bitmap {
+        let w = 44, h = 66
+        var pixels: [UInt8] = []
+        for y in 0..<h {
+            for x in 0..<w {
+                let p: Pixel
+                if glyphRows.contains(y), (14..<30).contains(x) { p = (240, 240, 240, 255) }
+                else if lines.contains(y), (x0..<x1).contains(x) { p = lineColour }
+                else { p = (30, 30, 32, 255) }
+                pixels += [p.r, p.g, p.b, p.a]
+            }
+        }
+        return GlyphKeyer.Bitmap(width: w, height: h, pixels: pixels)
+    }
+
+    func testTopEdgeLineIsDropped() throws {
+        let clean = try XCTUnwrap(GlyphKeyer.key(capture()))
+        XCTAssertEqual(clean.bitmap.height, 16, "the glyph plus a 1-pixel margin")
+        for rows in [[0], [1], [1, 2], [0, 1, 2]] {
+            let keyed = try XCTUnwrap(GlyphKeyer.key(capture(lines: rows)), "line at \(rows)")
+            XCTAssertEqual(keyed.bitmap, clean.bitmap, "line at \(rows) is gone and the picture is trimmed to the glyph")
+            XCTAssertTrue(keyed.isTemplate)
+        }
+    }
+
+    func testBottomEdgeLineIsDropped() throws {
+        let clean = try XCTUnwrap(GlyphKeyer.key(capture()))
+        XCTAssertEqual(try XCTUnwrap(GlyphKeyer.key(capture(lines: [64, 65]))).bitmap, clean.bitmap)
+        XCTAssertEqual(try XCTUnwrap(GlyphKeyer.key(capture(lines: [1, 65]))).bitmap, clean.bitmap, "both edges")
+        // A line that covers 80% of the width counts; an inset one too.
+        XCTAssertEqual(try XCTUnwrap(GlyphKeyer.key(capture(lines: [1], x0: 4, x1: 40))).bitmap, clean.bitmap)
+    }
+
+    func testLinesThatArePartOfTheItemStay() throws {
+        let clean = try XCTUnwrap(GlyphKeyer.key(capture()))
+        // Short: not the bar's edge.
+        XCTAssertGreaterThan(try XCTUnwrap(GlyphKeyer.key(capture(lines: [1], x0: 10, x1: 30))).bitmap.height, clean.bitmap.height)
+        // Touching the glyph (no empty row between): part of it.
+        XCTAssertGreaterThan(try XCTUnwrap(GlyphKeyer.key(capture(lines: [1], glyphRows: 2..<16))).bitmap.height, 16)
+        // Thick: a bar, not a line.
+        XCTAssertGreaterThan(try XCTUnwrap(GlyphKeyer.key(capture(lines: [1, 2, 3, 4]))).bitmap.height, clean.bitmap.height)
+        // Away from the edges: a glyph's own stroke (the top line of a "≡").
+        XCTAssertGreaterThan(try XCTUnwrap(GlyphKeyer.key(capture(lines: [20]))).bitmap.height, clean.bitmap.height)
+        // Nothing but a line: that is the picture.
+        let lineOnly = GlyphKeyer.droppingEdgeLines(try XCTUnwrap(GlyphKeyer.key(capture(lines: [1], glyphRows: 0..<0))).bitmap)
+        XCTAssertNotNil(GlyphKeyer.trim(lineOnly))
+    }
+
+    func testEdgeLinesOnAnAlreadyKeyedPicture() {
+        // Transparent picture: rows 0 (line) and 5...8 (glyph) show.
+        let w = 10, h = 14
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        for x in 0..<w { pixels[(0 * w + x) * 4 + 3] = 120 }
+        for y in 5...8 { for x in 3...6 { pixels[(y * w + x) * 4 + 3] = 255 } }
+        let dropped = GlyphKeyer.droppingEdgeLines(GlyphKeyer.Bitmap(width: w, height: h, pixels: pixels))
+        XCTAssertTrue((0..<w).allSatisfy { dropped.pixel(x: $0, y: 0).a == 0 })
+        XCTAssertEqual(dropped.pixel(x: 4, y: 6).a, 255)
+    }
 }

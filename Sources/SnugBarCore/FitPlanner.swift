@@ -21,6 +21,62 @@ public enum FitPlanner {
         }
     }
 
+    /// The menu bar as measured, which the estimate is built on. Status item frames from the reader already include
+    /// each item's own padding: third-party items usually sit edge to edge, while Apple's keep wider gaps. So the
+    /// estimate takes the fixed items' real span and the gaps actually seen, never one gap per item.
+    public struct Geometry: Codable, Equatable, Sendable {
+        /// From the leftmost fixed item's left edge to the rightmost one's right edge (Apple's real gaps included),
+        /// less the widths of shown third-party items sitting between fixed items, which count with their apps.
+        public var fixedSpan: Double
+        /// Gap between neighbouring third-party items: the median of the gaps between horizontally adjacent
+        /// third-party frames, 0 when there is nothing to measure.
+        public var thirdPartyGap: Double
+        /// Gap between the third-party items and the fixed items: measured when both are on screen, else
+        /// `thirdPartyGap`.
+        public var junctionGap: Double
+        /// Width of the shown third-party items inside the fixed span (taken out of `fixedSpan`).
+        public var insideWidth: Double
+
+        public init(fixedSpan: Double, thirdPartyGap: Double = 0, junctionGap: Double? = nil, insideWidth: Double = 0) {
+            self.fixedSpan = max(fixedSpan, 0)
+            self.thirdPartyGap = max(thirdPartyGap, 0)
+            self.junctionGap = max(junctionGap ?? thirdPartyGap, 0)
+            self.insideWidth = max(insideWidth, 0)
+        }
+
+        /// Gaps wider than this aren't spacing between neighbours (something else sits there, or the items are apart).
+        static let maxGap = 20.0
+
+        /// Measures on-screen frames.
+        /// - Parameters:
+        ///   - fixed: items that always stay (Apple's items, SnugBar's own icon and spacers).
+        ///   - thirdParty: on-screen items of the shown third-party apps being planned.
+        public static func measure(fixed: [Rect], thirdParty: [Rect]) -> Geometry {
+            let fixed = fixed.filter { $0.width > 0 }
+            let thirdParty = thirdParty.filter { $0.width > 0 }
+            // Third-party pairs that are neighbours in the bar (nothing fixed between them).
+            let all = (fixed.map { ($0, true) } + thirdParty.map { ($0, false) }).sorted { $0.0.minX < $1.0.minX }
+            var gaps: [Double] = []
+            for (a, b) in zip(all, all.dropFirst()) where !a.1 && !b.1 {
+                let gap = b.0.minX - a.0.maxX
+                if gap >= 0, gap <= maxGap { gaps.append(gap) }
+            }
+            let thirdPartyGap = median(gaps) ?? 0
+            guard let minX = fixed.map(\.minX).min(), let maxX = fixed.map(\.maxX).max() else {
+                return Geometry(fixedSpan: 0, thirdPartyGap: thirdPartyGap)
+            }
+            let inside = thirdParty.filter { $0.midX > minX && $0.midX < maxX }
+            let insideWidth = inside.reduce(0) { $0 + $1.width }
+            var junction: Double?
+            if let left = thirdParty.filter({ $0.midX <= minX }).max(by: { $0.maxX < $1.maxX }) {
+                let gap = minX - left.maxX
+                if gap >= 0, gap <= maxGap { junction = gap }
+            }
+            return Geometry(fixedSpan: maxX - minX - insideWidth, thirdPartyGap: thirdPartyGap, junctionGap: junction,
+                            insideWidth: insideWidth)
+        }
+    }
+
     public struct Plan: Codable, Equatable, Sendable {
         /// Apps to take out of the menu bar, leftmost first.
         public var moved: [String]
@@ -34,44 +90,57 @@ public enum FitPlanner {
         public var keptWidth: Double
         /// False when even moving every app isn't enough (or the room is unknown).
         public var fits: Bool
+        /// Apps already out that would just fit but stay out, because they don't fit with `returnMargin` to spare.
+        public var heldBack: [String] = []
     }
 
     /// Default room kept free so a rounding difference doesn't bring back the « button.
     public static let defaultMargin = 8.0
+    /// Extra room an app already moved out needs before it comes back, so an app near the edge isn't moved out and
+    /// back in again on every check.
+    public static let defaultReturnMargin = 8.0
 
     /// - Parameters:
-    ///   - apps: shown third-party apps, left to right.
-    ///   - fixedWidth: room taken by items that always stay (Apple's items, SnugBar's icon).
-    ///   - fixedItemCount: how many such items there are (for spacing).
+    ///   - apps: shown third-party apps, left to right, with their remembered widths (also for apps that are off
+    ///     screen now).
+    ///   - geometry: the measured fixed span and gaps (`Geometry.measure`).
     ///   - availableWidth: room for status items (see `availableWidth(...)`).
-    ///   - itemSpacing: gap between neighbouring items.
+    ///   - movedNow: apps out of the menu bar for room now; they come back only with `returnMargin` to spare.
     public static func plan(
-        apps: [App], fixedWidth: Double, fixedItemCount: Int, availableWidth: Double,
-        itemSpacing: Double = 0, margin: Double = defaultMargin
+        apps: [App], geometry: Geometry, availableWidth: Double, margin: Double = defaultMargin,
+        movedNow: Set<String> = [], returnMargin: Double = defaultReturnMargin
     ) -> Plan {
         func needed(_ list: ArraySlice<App>) -> Double {
-            let count = fixedItemCount + list.reduce(0) { $0 + $1.itemCount }
-            let gaps = Double(max(count - 1, 0)) * max(itemSpacing, 0)
-            return fixedWidth + list.reduce(0) { $0 + $1.width } + gaps + margin
+            let items = list.reduce(0) { $0 + max($1.itemCount, 1) }
+            let gaps = items > 0 ? geometry.junctionGap + Double(items - 1) * geometry.thirdPartyGap : 0
+            return geometry.fixedSpan + list.reduce(0) { $0 + $1.width } + gaps + margin
         }
-        let all = apps[...]
-        let required = needed(all)
+        func keep(extra: Double) -> ArraySlice<App> {
+            var kept = apps[...]
+            while !kept.isEmpty {
+                let returning = kept.contains { movedNow.contains($0.bundleID) }
+                if needed(kept) + (returning ? extra : 0) <= availableWidth { break }
+                kept = kept.dropFirst()
+            }
+            return kept
+        }
+        let required = needed(apps[...])
         guard availableWidth > 0 else {
             return Plan(moved: [], kept: apps.map(\.bundleID), availableWidth: availableWidth,
                         requiredWidth: required, keptWidth: required, fits: false)
         }
-        var kept = all
-        while needed(kept) > availableWidth, !kept.isEmpty {
-            kept = kept.dropFirst()
-        }
+        let kept = keep(extra: max(returnMargin, 0))
         let keptWidth = needed(kept)
+        let moved = apps.prefix(apps.count - kept.count).map(\.bundleID)
+        let movedWithoutHold = Set(apps.prefix(apps.count - keep(extra: 0).count).map(\.bundleID))
         return Plan(
-            moved: apps.prefix(apps.count - kept.count).map(\.bundleID),
+            moved: moved,
             kept: kept.map(\.bundleID),
             availableWidth: availableWidth,
             requiredWidth: required,
             keptWidth: keptWidth,
-            fits: keptWidth <= availableWidth
+            fits: keptWidth <= availableWidth,
+            heldBack: moved.filter { !movedWithoutHold.contains($0) }
         )
     }
 
@@ -91,11 +160,15 @@ public enum FitPlanner {
         var gaps: [Double] = []
         for (a, b) in zip(sorted, sorted.dropFirst()) {
             let gap = b.minX - a.maxX
-            if gap >= 0 && gap <= 20 { gaps.append(gap) }
+            if gap >= 0 && gap <= Geometry.maxGap { gaps.append(gap) }
         }
-        guard !gaps.isEmpty else { return 0 }
-        gaps.sort()
-        return gaps[gaps.count / 2]
+        return median(gaps) ?? 0
+    }
+
+    private static func median(_ values: [Double]) -> Double? {
+        guard !values.isEmpty else { return nil }
+        let sorted = values.sorted()
+        return sorted[sorted.count / 2]
     }
 }
 
@@ -125,9 +198,38 @@ public struct FitMeasurements: Sendable {
         for (bundle, entries) in grouped {
             let width = entries.reduce(0) { $0 + $1.item.frame.width }
             let overflowed = entries.first { $0.item.isOverflowed }
-            let order = overflowed.map { -1_000_000 + Double($0.index) }
+            let order = overflowed.map { Self.overflowOrder + Double($0.index) }
                 ?? entries.map(\.item.frame.minX).min() ?? 0
             apps[bundle] = Measure(width: width, itemCount: entries.count, order: order)
+        }
+    }
+
+    /// Order given to apps that are off the bar (in macOS's overflow, or missing from the tree): left of everything on
+    /// screen, as macOS overflows from the left.
+    static let overflowOrder = -1_000_000.0
+    static let offBarOrder = -2_000_000.0
+
+    /// Measures apps among `bundleIDs` that were never measured collapsed from items remembered from another time
+    /// they were on screen (e.g. while revealed, or focused to open one). Their order is unknown, so they count as off
+    /// the bar (leftmost), keeping their remembered left-to-right order.
+    public mutating func adopt(_ remembered: [String: [MenuBarItem]], for bundleIDs: Set<String>) {
+        for bundle in bundleIDs where apps[bundle] == nil {
+            let items = (remembered[bundle] ?? []).filter { !$0.isAppleItem && $0.frame.width > 0 }
+            guard !items.isEmpty else { continue }
+            let width = items.reduce(0) { $0 + $1.frame.width }
+            let left = items.map(\.frame.minX).min() ?? 0
+            apps[bundle] = Measure(width: width, itemCount: items.count, order: Self.offBarOrder + left)
+        }
+    }
+
+    /// Apps let through but with no item in the bar's tree now: macOS keeps them off the bar, so they are leftmost
+    /// (and so the first to move out), keeping their relative order.
+    public mutating func markOffBar(_ bundleIDs: Set<String>) {
+        for bundle in bundleIDs {
+            // Only apps last measured on screen; ones measured in the overflow are leftmost already.
+            guard var m = apps[bundle], m.order > Self.overflowOrder / 2 else { continue }
+            m.order += Self.offBarOrder
+            apps[bundle] = m
         }
     }
 

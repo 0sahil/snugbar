@@ -57,9 +57,11 @@ public enum LayoutReconcile {
         public var editorDragging: Bool
         /// A user action asked for this (editor drop, `order`): the ⌘-drag fallback is allowed.
         public var explicit: Bool
+        /// Zen mode is on: apps and spacers are out of the menu bar, so what is there isn't the layout to fix.
+        public var zen: Bool
 
         public init(desired: [String], live: [String], positions: [String: Double]?, newKeys: Set<String> = [],
-                    userDragging: Bool = false, editorDragging: Bool = false, explicit: Bool = false) {
+                    userDragging: Bool = false, editorDragging: Bool = false, explicit: Bool = false, zen: Bool = false) {
             self.desired = desired
             self.live = live
             self.positions = positions
@@ -67,6 +69,7 @@ public enum LayoutReconcile {
             self.userDragging = userDragging
             self.editorDragging = editorDragging
             self.explicit = explicit
+            self.zen = zen
         }
     }
 
@@ -76,7 +79,12 @@ public enum LayoutReconcile {
         public var plan: OrderPlanner.LayoutPlan?
     }
 
+    public static let zenReason = "Zen mode is on; the layout is checked when it ends"
+
     public static func decide(_ input: Input) -> Decision {
+        if input.zen {
+            return Decision(action: .skipped, reasons: [zenReason], plan: nil)
+        }
         if input.userDragging {
             return Decision(action: .skipped, reasons: ["the user is ⌘-dragging items in the menu bar"], plan: nil)
         }
@@ -137,14 +145,14 @@ public enum LayoutReconcile {
     public static func evaluate(
         layout: DesiredLayout, live: [String], positions: [String: Double]?, ownBundleID: String,
         sectionKeys: [Section: [String]] = [:],
-        userDragging: Bool = false, editorDragging: Bool = false, explicit: Bool = false
+        userDragging: Bool = false, editorDragging: Bool = false, explicit: Bool = false, zen: Bool = false
     ) -> Evaluation {
         let map = LayoutSpacer.orderKeyMap(layout.spacers, ownBundleID: ownBundleID, positions: positions)
         let inverse = Dictionary(map.map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
         let normalized = DesiredOrder.normalized(layout.shownOrder, positions: positions)
         let input = Input(
             desired: DesiredOrder.mapped(normalized, map), live: DesiredOrder.mapped(live, map), positions: positions,
-            userDragging: userDragging, editorDragging: editorDragging, explicit: explicit
+            userDragging: userDragging, editorDragging: editorDragging, explicit: explicit, zen: zen
         )
         let decision = decide(input)
         var save: [String]?
@@ -154,8 +162,8 @@ public enum LayoutReconcile {
             save = normalized
         }
         var evaluation = Evaluation(decision: decision, orderToSave: save, spacerKeys: map)
-        // Hidden sections: order file only, never while someone drags.
-        guard let positions, !userDragging, !editorDragging else { return evaluation }
+        // Hidden sections: order file only, never while someone drags or in Zen.
+        guard let positions, !userDragging, !editorDragging, !zen else { return evaluation }
         var working = positions
         if decision.action == .writeOrderFile, let changes = decision.plan?.changes {
             working.merge(changes) { _, new in new }

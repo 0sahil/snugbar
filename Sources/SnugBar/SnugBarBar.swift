@@ -485,17 +485,23 @@ struct BarView: View {
 
 /// A tile's picture in its box: the same for the tile and for the copy under the pointer while dragging.
 private struct BarTileContent: View {
-    /// Every tile draws its image aspect-fit in the same box, so captured pictures and app icons line up.
+    /// Every tile draws its image aspect-fit in a box of the same height, so captured pictures and app icons line up;
+    /// wide pictures (the clock) get a wider box, up to three tiles (`TilePicture`).
     static let imageSize: CGFloat = 18
     static let tileSize: CGFloat = 24
+    static let padding: CGFloat = 3
 
     let entry: SnugBarBarController.Entry
 
     var body: some View {
+        let box = CGFloat(TilePicture.boxWidth(
+            width: Double(entry.image.size.width), height: Double(entry.image.size.height), side: Double(Self.imageSize),
+            chrome: Double(Self.tileSize - Self.imageSize + 2 * Self.padding)
+        ))
         image
-            .frame(width: Self.imageSize, height: Self.imageSize)
-            .frame(width: Self.tileSize, height: Self.tileSize)
-            .padding(.horizontal, 3)
+            .frame(width: box, height: Self.imageSize)
+            .frame(width: box + Self.tileSize - Self.imageSize, height: Self.tileSize)
+            .padding(.horizontal, Self.padding)
     }
 
     /// Template pictures (keyed captures) take the label colour; app icons keep theirs.

@@ -162,6 +162,11 @@ final class LayoutKeeper {
             if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
             guard let self else { return }
             while self.running || self.controller.barIsFrozen { try? await Task.sleep(nanoseconds: 200_000_000) }
+            // In Zen the apps and spacers are out of the menu bar: the order is applied when Zen ends (`zenEnded`).
+            if self.controller.state.zen {
+                self.pending.insert(.userOrder)
+                return
+            }
             self.running = true
             let evaluation = self.evaluate(explicit: true)
             await self.execute(evaluation, explicit: true)
@@ -183,6 +188,8 @@ final class LayoutKeeper {
 
     private func run() {
         guard !stopped, !pending.isEmpty else { return }
+        // Nothing is checked or written in Zen: the triggers wait, and the end of Zen schedules them (`zenEnded`).
+        if controller.state.zen { return }
         // One at a time; and not while the menu bar shows something other than the plan or someone is dragging.
         if running || controller.layoutIsBusy || controller.barIsFrozen || editorDragging {
             schedule(after: 1.0)
@@ -222,7 +229,7 @@ final class LayoutKeeper {
             layout: controller.settings.layout, live: controller.liveLayoutKeys(items),
             positions: positions, ownBundleID: controller.ownBundleID,
             sectionKeys: controller.layoutSectionKeys(positions: positions),
-            userDragging: controller.barIsFrozen, editorDragging: editorDragging, explicit: explicit
+            userDragging: controller.barIsFrozen, editorDragging: editorDragging, explicit: explicit, zen: controller.state.zen
         )
         lastEvaluation = evaluation
         return evaluation

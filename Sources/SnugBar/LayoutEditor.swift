@@ -312,7 +312,8 @@ private struct LayoutTileView: View {
         let selected = model.selection.contains(t.key)
         let beingDragged = model.drag?.contents.tiles.contains { $0.key == t.key } ?? false
         content
-            .frame(width: t.spacer.map { max(CGFloat($0.width), 10) + 8 } ?? Self.width, height: Self.height)
+            .frame(width: t.spacer.map { max(CGFloat($0.width), 10) + 8 } ?? Self.imageWidth(tile.image) + Self.width - Self.imageSize,
+                   height: Self.height)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(selected ? Color.accentColor.opacity(0.22) : Color.clear)
@@ -348,8 +349,14 @@ private struct LayoutTileView: View {
                 .strokeBorder(Color.secondary, style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
                 .frame(width: max(CGFloat(spacer.width), 10), height: Self.imageSize + 2)
         } else {
-            TileImage(image: tile.image).frame(width: Self.imageSize, height: Self.imageSize)
+            TileImage(image: tile.image).frame(width: Self.imageWidth(tile.image), height: Self.imageSize)
         }
+    }
+
+    /// Wide pictures (the clock) get a wider box at the same height, up to three tiles (`TilePicture`).
+    static func imageWidth(_ image: NSImage?) -> CGFloat {
+        CGFloat(TilePicture.boxWidth(width: Double(image?.size.width ?? 0), height: Double(image?.size.height ?? 0),
+                                     side: Double(imageSize), chrome: Double(width - imageSize)))
     }
 }
 
@@ -383,7 +390,7 @@ private struct LayoutDragImage: View {
                     RoundedRectangle(cornerRadius: 4).strokeBorder(Color.secondary, style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
                         .frame(width: max(CGFloat(spacer.width), 10), height: 22)
                 } else {
-                    TileImage(image: tile?.image).frame(width: 20, height: 20)
+                    TileImage(image: tile?.image).frame(width: LayoutTileView.imageWidth(tile?.image), height: LayoutTileView.imageSize)
                 }
             }
             .padding(6)

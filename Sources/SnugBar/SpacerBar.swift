@@ -9,6 +9,8 @@ import SnugBarEngine
 @MainActor
 final class SpacerBar {
     private var items: [String: NSStatusItem] = [:]
+    /// Places of the items taken out for Zen (`SpacerSync.State.stashed`).
+    private var stashed: [String: Double] = [:]
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -18,14 +20,21 @@ final class SpacerBar {
     static func positionKey(_ spacer: LayoutSpacer) -> String { "NSStatusItem Preferred Position \(spacer.autosaveName)" }
     static func visibleKey(_ spacer: LayoutSpacer) -> String { "NSStatusItem Visible \(spacer.autosaveName)" }
 
-    /// Creates, resizes and removes items to match `spacers` (`SpacerSync`). In Zen the items shrink to zero width
-    /// rather than being hidden: hiding an autosaved status item makes AppKit drop its place in the menu bar.
-    func sync(_ spacers: [LayoutSpacer], zen: Bool) {
+    /// Spacers taken out of the menu bar for Zen (for diagnostics).
+    var stashedPlaces: [String: Double] { stashed }
+
+    /// Creates, resizes and removes items to match `spacers` (`SpacerSync`). In Zen the items leave the menu bar (a
+    /// zero-length item still takes a slot) and come back at the same place afterwards.
+    /// - Parameters:
+    ///   - orderPositions: the system order file, when readable: a spacer's key there says where it is.
+    ///   - ownBundleID: SnugBar's bundle ID (the order file's keys for its items).
+    func sync(_ spacers: [LayoutSpacer], zen: Bool, orderPositions: [String: Double]?, ownBundleID: String) {
         let byID = Dictionary(spacers.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        let current = items.mapValues { Double($0.length) }
+        let current = SpacerSync.State(items: items.mapValues { Double($0.length) }, stashed: stashed)
         for step in SpacerSync.steps(current: current, spacers: spacers, zen: zen) {
             switch step {
             case let .remove(id):
+                stashed[id] = nil
                 if let item = items.removeValue(forKey: id) { NSStatusBar.system.removeStatusItem(item) }
             case let .create(id, length):
                 guard let spacer = byID[id] else { continue }
@@ -34,10 +43,28 @@ final class SpacerBar {
                 items[id] = item
             case let .setLength(id, length):
                 items[id]?.length = CGFloat(length)
+            case let .stash(id):
+                guard let spacer = byID[id], let item = items.removeValue(forKey: id) else { continue }
+                let position = place(of: spacer, orderPositions: orderPositions, ownBundleID: ownBundleID)
+                NSStatusBar.system.removeStatusItem(item)
+                stashed[id] = position
+                // Kept in AppKit's own record too, so a quit during Zen doesn't lose the place.
+                if let position { defaults.set(position, forKey: Self.positionKey(spacer)) }
+            case let .restore(id, length, position):
+                stashed[id] = nil
+                guard let spacer = byID[id] else { continue }
+                place(spacer, at: position, length: length)
             }
         }
         // An item hidden by an earlier build (or dragged out) comes back.
         for item in items.values where !item.isVisible { item.isVisible = true }
+    }
+
+    /// Where a spacer's item is now, in the order file's units: the order file's value when it has a key for the item,
+    /// else AppKit's preferred position for it. Nil when neither is known.
+    func place(of spacer: LayoutSpacer, orderPositions: [String: Double]?, ownBundleID: String) -> Double? {
+        if let value = orderPositions?[spacer.orderFileKey(ownBundleID: ownBundleID)] { return value }
+        return (defaults.object(forKey: Self.positionKey(spacer)) as? NSNumber)?.doubleValue
     }
 
     /// Removes every item (SnugBar is quitting; the system removes them anyway).
@@ -47,9 +74,15 @@ final class SpacerBar {
     }
 
     /// Moves a spacer by giving it a new preferred position (distance from the right edge, the order file's units)
-    /// and recreating its item, which is when AppKit reads the value.
-    func place(_ spacer: LayoutSpacer, at position: Double) {
-        let length = items[spacer.id]?.length ?? CGFloat(spacer.width)
+    /// and recreating its item, which is when AppKit reads the value. Also brings a spacer back after Zen.
+    func place(_ spacer: LayoutSpacer, at position: Double, length: Double? = nil) {
+        // A spacer out of the menu bar for Zen stays out; it comes back at this place when Zen ends.
+        if stashed[spacer.id] != nil, items[spacer.id] == nil {
+            stashed[spacer.id] = position
+            defaults.set(position, forKey: Self.positionKey(spacer))
+            return
+        }
+        let length = length.map { CGFloat($0) } ?? items[spacer.id]?.length ?? CGFloat(spacer.width)
         if let item = items.removeValue(forKey: spacer.id) { NSStatusBar.system.removeStatusItem(item) }
         defaults.set(position, forKey: Self.positionKey(spacer))
         let item = make(spacer)
@@ -59,6 +92,7 @@ final class SpacerBar {
 
     /// Drops what AppKit remembers about a removed spacer.
     func forget(_ spacer: LayoutSpacer) {
+        stashed[spacer.id] = nil
         defaults.removeObject(forKey: Self.positionKey(spacer))
         defaults.removeObject(forKey: Self.visibleKey(spacer))
     }

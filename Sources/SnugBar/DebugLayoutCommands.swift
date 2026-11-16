@@ -72,7 +72,9 @@ extension DebugRunner {
         )
     }
 
-    /// Made-up apps (example bundle IDs) with SF Symbols standing in for captured pictures.
+    /// Made-up apps (example bundle IDs) with SF Symbols standing in for captured pictures. Apple's items get made-up
+    /// captures as the live bar gives them (the bar's top edge in the crop), keyed as the app keys them; the clock is
+    /// a wide one.
     static func demoLayout() -> (rows: [SnugBarCore.Section: [LayoutTile]], images: [String: NSImage], selected: [String]) {
         func item(_ id: String, _ bundle: String, _ app: String, _ name: String? = nil, apple: Bool = false, ax: String? = nil) -> MenuBarItem {
             MenuBarItem(id: ItemID(rawValue: id), ownerBundleID: bundle, ownerPID: 0, appName: app, displayName: name ?? app,
@@ -108,8 +110,18 @@ extension DebugRunner {
         ], spacers: [s1, s2])
         let live = layout.shownOrder
         let rows = LayoutEditorRows.rows(items: items.map(\.0), liveShown: live, sections: sections, layout: layout) { _ in true }
+        let captures: [String: NSImage] = [
+            "module:WiFi": fakeCapture(symbol: "wifi", width: 22),
+            "module:Battery": fakeCapture(symbol: "battery.75percent", width: 26),
+            "module:ControlCenter": fakeCapture(symbol: "switch.2", width: 26),
+            "module:Clock": fakeCapture(text: "Mon 16 Nov  14:05", width: 150.5),
+        ]
         var images: [String: NSImage] = [:]
         for (item, symbol) in items {
+            if let capture = captures[item.id.rawValue] {
+                images[item.id.rawValue] = capture
+                continue
+            }
             let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
                 .withSymbolConfiguration(.init(pointSize: 15, weight: .regular)) ?? NSImage()
             image.isTemplate = true

@@ -63,6 +63,11 @@ final class AppController: ObservableObject {
     private var measurements = FitMeasurements()
     private(set) var lastFit: FitAnalysis?
     private var fitWork: DispatchWorkItem?
+    /// Moves the leftmost shown app out when macOS's overflow shows though the plan says everything fits.
+    private var safetyNet = FitSafetyNet()
+    /// The last snapshot had macOS's « button.
+    private var lastSnapshotHadOverflowIndicator = false
+    private var lastSafetyNetLog: String?
     private var captureInFlight = false
     /// When items may be captured: only once they've settled after the bar changed (SPEC 3.5).
     var captureGate = CaptureSettleGate()
@@ -252,7 +257,7 @@ final class AppController: ObservableObject {
         state.revealInBar = false
         monitor.suppressHoverUntilPointerLeaves()
         applyVisibility()
-        // Zen shrinks SnugBar's spacers to nothing (they keep their place in the menu bar).
+        // Zen takes SnugBar's spacers out of the menu bar (remembering their places); its end puts them back.
         syncSpacers()
         if !on {
             scheduleFitCheck(after: 1.5)
@@ -574,28 +579,59 @@ final class AppController: ObservableObject {
         // Measure only the collapsed menu bar, and not while an item is being opened, the hide is lifted or the user
         // ⌘-drags items.
         if state.menuBarReveal != .collapsed { return }
-        if assessment.isFocusing || assessment.isSuspended || barIsFrozen {
+        if assessment.isFocusing || assessment.isSuspended || barIsFrozen || isActivating {
             scheduleFitCheck(after: 2)
             return
         }
         let live = snapshotItems()
         let shown = VisibilityPlanner.collapsedVisibleApps(
             state: state, sections: settings.sections,
-            candidates: ItemGathering.appsWithItems(live: live, measurements: measurements,
+            candidates: ItemGathering.appsWithItems(live: live, measurements: measurements, remembered: Set(catalog.itemsByApp.keys),
                                                     running: ItemGathering.runningBundleIDs(), ownBundleID: ownBundleID),
             excluding: [ownBundleID]
         )
-        let analysis = FitAnalysis.make(items: live, measurements: measurements, shownApps: shown, ownBundleID: ownBundleID)
+        let onScreen = currentAllowed
+        var analysis = FitAnalysis.make(
+            items: live, measurements: measurements, remembered: catalog.itemsByApp, shownApps: shown, ownBundleID: ownBundleID,
+            isOnScreen: { onScreen?.contains($0) ?? true }, movedNow: overflowHidden,
+            overflowIndicator: lastSnapshotHadOverflowIndicator, shortfall: { [self] in safetyNet.shortfall(for: $0) }
+        )
+        guard let plan = analysis.plan else {
+            lastFit = analysis
+            return
+        }
+        var next = Set(plan.moved)
+        // The safety net: macOS's overflow in use while the plan says everything fits.
+        let settledSince = captureGate.lastBarChange.map { Date().timeIntervalSince($0) } ?? .infinity
+        let verdict = safetyNet.decide(
+            survey: analysis.check.survey, plan: plan, movedNow: overflowHidden,
+            settled: settledSince >= FitSafetyNet.settleTime, userBusy: barIsFrozen || isActivating, now: Date()
+        )
+        analysis.safetyNet = verdict.label
         lastFit = analysis
-        guard analysis.plan != nil else { return }
-        let next = Set(analysis.plan?.moved ?? [])
+        switch verdict {
+        case let .fire(app):
+            next.insert(app)
+            NSLog("SnugBar: macOS's overflow is in use though the estimate fits (%@); moving %@ to Didn't Fit, learnt shortfall %.1f pt",
+                  analysis.check.survey.overflowedApps.joined(separator: ", "), app, safetyNet.shortfall)
+        case .settling:
+            scheduleFitCheck(after: max(FitSafetyNet.settleTime - settledSince, 0) + 0.3)
+        case .roundLimit, .nothingToMove:
+            if lastSafetyNetLog != verdict.label { NSLog("SnugBar: fit safety net %@", verdict.label) }
+        case .quiet, .planMoves, .userBusy:
+            break
+        }
+        lastSafetyNetLog = verdict.label
         guard next != overflowHidden else { return }
         let newlyMoved = next.subtracting(overflowHidden)
         let apply = { [weak self] in
             guard let self else { return }
             self.overflowHidden = next
+            self.noteBarChanged()
             self.applyVisibility()
             if self.bar.isVisible, !self.bar.isShowingKeys { self.bar.update(groups: self.barGroups(letters: false)) }
+            // Check again once the bar has settled: macOS may still overflow (the safety net then moves the next app).
+            self.scheduleFitCheck(after: FitSafetyNet.settleTime + 0.5)
         }
         // Keep pictures of apps about to leave the menu bar while they are still on screen.
         let positions = try? orderFile.readPositions()
@@ -607,7 +643,9 @@ final class AppController: ObservableObject {
 
     /// One snapshot, also used to remember items and widths of apps that are on screen.
     func snapshotItems() -> [MenuBarItem] {
-        let items = reader.snapshot(orderPositions: try? orderFile.readPositions()).items
+        let snap = reader.snapshot(orderPositions: try? orderFile.readPositions())
+        let items = snap.items
+        lastSnapshotHadOverflowIndicator = snap.overflowIndicatorFrame != nil
         // While an item is being opened or the hide is lifted, other apps' visibility doesn't match the plan.
         guard !assessment.isFocusing, !assessment.isSuspended else { return items }
         let onScreen = currentAllowed

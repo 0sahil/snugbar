@@ -48,6 +48,25 @@ public struct BarTile: Equatable, Sendable, Identifiable {
     }
 }
 
+/// How wide the box for an item's picture is, in the SnugBar Bar and the layout editor. Pictures are drawn aspect-fit
+/// in a box of the tiles' usual height; a square box made a wide item (the clock's date and time) too small to read.
+/// So a wide picture gets a box as wide as it needs: its own width (never blown up past its size in the menu bar), or
+/// less when that is enough to fill the height, and at most `maxTiles` usual tiles in all.
+public enum TilePicture {
+    public static let maxTiles = 3.0
+
+    /// - Parameters:
+    ///   - width, height: the picture's size in points (0 when unknown: a square box).
+    ///   - side: the usual (square) box's side.
+    ///   - chrome: what the tile adds around the box (padding), so the whole tile is at most `maxTiles` usual tiles.
+    public static func boxWidth(width: Double, height: Double, side: Double, chrome: Double) -> Double {
+        guard width.isFinite, height.isFinite, width > 0, height > 0, width > height, width > side else { return side }
+        let needed = min(width, side * width / height)
+        let cap = maxTiles * (side + chrome) - chrome
+        return min(max(needed, side), max(cap, side)).rounded()
+    }
+}
+
 /// What the SnugBar Bar lists (features 20, 23).
 public enum BarListing {
     /// The tiles for one group's items. Items with a picture of their own get a tile each. When an app has several

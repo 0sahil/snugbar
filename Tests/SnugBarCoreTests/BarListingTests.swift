@@ -171,3 +171,28 @@ final class ItemCatalogTests: XCTestCase {
         XCTAssertTrue(catalog.itemsByApp.isEmpty)
     }
 }
+
+final class TilePictureTests: XCTestCase {
+    // The layout editor's tiles: a 20 pt box in a 36 pt tile.
+    private func editor(_ w: Double, _ h: Double) -> Double { TilePicture.boxWidth(width: w, height: h, side: 20, chrome: 16) }
+
+    func testSquareAndSmallPicturesKeepTheSquareBox() {
+        XCTAssertEqual(editor(18, 14), 20, "Wi-Fi")
+        XCTAssertEqual(editor(64, 64), 20, "app icon")
+        XCTAssertEqual(editor(12, 30), 20, "tall")
+        XCTAssertEqual(editor(0, 0), 20, "unknown size")
+    }
+
+    func testWidePicturesGetWiderBoxesWithoutBeingBlownUp() {
+        XCTAssertEqual(editor(26, 12), 26, "a battery keeps its own width: drawn at its menu bar size")
+        XCTAssertEqual(editor(60, 30), 40, "already taller than the box: as wide as it needs at the box's height")
+    }
+
+    func testVeryWidePicturesAreCappedAtThreeTiles() {
+        // The clock's date and time, 125 × 11 pt: 3 × 36 = 108 pt tile, so a 92 pt box.
+        XCTAssertEqual(editor(125, 11), 92)
+        XCTAssertEqual(editor(125, 11) + 16, 3 * 36)
+        // The SnugBar Bar's tiles: an 18 pt box in 30 pt.
+        XCTAssertEqual(TilePicture.boxWidth(width: 125, height: 11, side: 18, chrome: 12) + 12, 90)
+    }
+}

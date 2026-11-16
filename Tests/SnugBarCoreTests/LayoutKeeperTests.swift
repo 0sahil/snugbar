@@ -97,6 +97,28 @@ final class LayoutReconcileTests: XCTestCase {
         XCTAssertNotNil(e.decision.plan?.changes[spacer.orderFileKey(ownBundleID: own)])
     }
 
+    func testNothingIsFixedOrWrittenInZen() {
+        let own = "app.example.SnugBar"
+        let spacer = LayoutSpacer(id: "S")
+        var positions = Fixtures.positions
+        positions[spacer.orderFileKey(ownBundleID: own)] = 500
+        // In Zen the spacer (and every app) is out of the menu bar: what's left must not be taken for the layout.
+        let layout = DesiredLayout(shownOrder: [chat, spacer.key, clipboard], spacers: [spacer], hiddenOrder: [cpu])
+        for explicit in [false, true] {
+            let e = LayoutReconcile.evaluate(layout: layout, live: [clipboard, chat], positions: positions, ownBundleID: own,
+                                             sectionKeys: [.hidden: [cpu]], explicit: explicit, zen: true)
+            XCTAssertEqual(e.decision.action, .skipped)
+            XCTAssertEqual(e.decision.reasons, [LayoutReconcile.zenReason])
+            XCTAssertTrue(e.fileChanges.isEmpty)
+            XCTAssertNil(e.orderToSave)
+            XCTAssertTrue(e.sectionPlans.isEmpty)
+            XCTAssertTrue(e.sectionOrdersToSave.isEmpty)
+        }
+        // After Zen the same menu bar is fixed as usual.
+        let after = LayoutReconcile.evaluate(layout: layout, live: [clipboard, spacer.key, chat], positions: positions, ownBundleID: own)
+        XCTAssertEqual(after.decision.action, .writeOrderFile)
+    }
+
     func testTriggers() {
         XCTAssertTrue(LayoutTrigger.wake.forcesVisibility)
         XCTAssertFalse(LayoutTrigger.spaceChanged.forcesVisibility)

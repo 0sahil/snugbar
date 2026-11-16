@@ -139,8 +139,60 @@ public enum GlyphKeyer {
             }
         }
 
-        guard let trimmed = trim(Bitmap(width: input.width, height: input.height, pixels: out)) else { return nil }
+        let cleaned = droppingEdgeLines(Bitmap(width: input.width, height: input.height, pixels: out))
+        guard let trimmed = trim(cleaned) else { return nil }
         return Result(bitmap: trimmed, isTemplate: isTemplate, background: bg)
+    }
+
+    /// A line this share of the picture's width or more…
+    static let edgeLineSpan = 0.8
+    /// …at most this many pixels thick…
+    static let edgeLineMaxRows = 3
+    /// …within this share of the height from the top or bottom edge, with empty rows between it and the glyph, is the
+    /// menu bar's edge (its top highlight) caught in the crop, not part of the item.
+    static let edgeZone = 0.25
+
+    /// Clears thin full-width lines at the top and bottom edges that aren't connected to the glyph: a band of at most
+    /// `edgeLineMaxRows` rows near an edge, each spanning at least `edgeLineSpan` of the width, with an empty row
+    /// between it and the rest. A picture that is nothing but such a line is left alone.
+    public static func droppingEdgeLines(_ bitmap: Bitmap, threshold: UInt8 = 8) -> Bitmap {
+        let w = bitmap.width, h = bitmap.height
+        guard w > 0, h > 2 else { return bitmap }
+        // Each row's horizontal extent of showing pixels (nil: empty).
+        let extents: [(Int, Int)?] = (0..<h).map { y in
+            var first: Int?, last = 0
+            for x in 0..<w where bitmap.pixels[(y * w + x) * 4 + 3] > threshold {
+                if first == nil { first = x }
+                last = x
+            }
+            return first.map { ($0, last) }
+        }
+        // Runs of non-empty rows, top to bottom.
+        var bands: [ClosedRange<Int>] = []
+        var start: Int?
+        for y in 0...h {
+            let filled = y < h && extents[y] != nil
+            if filled, start == nil { start = y }
+            if !filled, let s = start { bands.append(s...(y - 1)); start = nil }
+        }
+        guard bands.count > 1 else { return bitmap }
+        let zone = max(Int((Double(h) * edgeZone).rounded(.down)), 2)
+        func isLine(_ band: ClosedRange<Int>) -> Bool {
+            band.count <= edgeLineMaxRows && band.allSatisfy { y in
+                guard let (a, b) = extents[y] else { return false }
+                return Double(b - a + 1) >= Double(w) * edgeLineSpan
+            }
+        }
+        var clear: [ClosedRange<Int>] = []
+        if let top = bands.first, top.lowerBound < zone, isLine(top) { clear.append(top) }
+        if let bottom = bands.last, bottom.upperBound >= h - zone, isLine(bottom), clear.count < bands.count - 1 { clear.append(bottom) }
+        guard !clear.isEmpty else { return bitmap }
+        var pixels = bitmap.pixels
+        for band in clear {
+            pixels.replaceSubrange((band.lowerBound * w * 4)..<((band.upperBound + 1) * w * 4),
+                                   with: repeatElement(0, count: band.count * w * 4))
+        }
+        return Bitmap(width: w, height: h, pixels: pixels)
     }
 
     /// The background, from the border pixels only (the outermost row and column on each side). Nil when most of

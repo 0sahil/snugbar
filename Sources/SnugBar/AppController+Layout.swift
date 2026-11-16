@@ -14,14 +14,17 @@ extension AppController {
         keeper.start()
     }
 
-    /// Spacers follow the settings; Zen shrinks them to zero width. Held back while the user ⌘-drags items.
+    /// Spacers follow the settings; Zen takes them out of the menu bar and its end puts them back where they were.
+    /// Held back while the user ⌘-drags items.
     func syncSpacers() {
         guard !isPreview else { return }
         if barIsFrozen {
             deferSpacerSync()
             return
         }
-        spacerBar.sync(settings.layout.spacers, zen: state.zen)
+        // Only Zen needs to know where the items are (to put them back there).
+        let positions = state.zen ? try? orderFile.readPositions() : nil
+        spacerBar.sync(settings.layout.spacers, zen: state.zen, orderPositions: positions, ownBundleID: ownBundleID)
         noteBarChanged()
     }
 

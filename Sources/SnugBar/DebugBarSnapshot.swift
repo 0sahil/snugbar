@@ -1,5 +1,6 @@
 import AppKit
 import SnugBarCore
+import SnugBarEngine
 import SwiftUI
 
 /// `bar-snapshot --fake --out <png> [--dragging] [--onto-other] [--no-access] [--width <pt>] [--appearance light|dark]`:
@@ -115,6 +116,12 @@ extension DebugRunner {
         let hidden: [(String, String, String)] = [
             ("chat", "Chat", "bubble.left"), ("weather", "Weather", "cloud.sun"), ("timer", "Timer", "timer"),
             ("sync", "Sync", "arrow.triangle.2.circlepath"), ("music", "Music Bar", "music.note"), ("notes", "Notes Bar", "note.text"),
+            ("worldclock", "World Clock", ""),
+        ]
+        // Captured pictures as the live bar gives them (with its top edge in the crop); one is a wide item.
+        let captures: [String: NSImage] = [
+            "sync": fakeCapture(symbol: "arrow.triangle.2.circlepath", width: 30),
+            "worldclock": fakeCapture(text: "NYC 09:05   LON 14:05", width: 150),
         ]
         let always: [(String, String, String)] = [("tunnel", "Tunnel", "network"), ("backup", "Backup", "externaldrive")]
         let didntFit: [(String, String, String)] = [("meters", "Meters", "cpu")]
@@ -123,9 +130,9 @@ extension DebugRunner {
         let filePositions = access ? positions : nil
         func group(_ kind: BarGroupKind, _ list: [(String, String, String)]) -> SnugBarBarController.Group {
             let entries = list.map { app, name, symbol -> SnugBarBarController.Entry in
-                let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+                let image = captures[app] ?? NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
                     .withSymbolConfiguration(.init(pointSize: 14, weight: .regular)) ?? NSImage()
-                image.isTemplate = true
+                if captures[app] == nil { image.isTemplate = true }
                 let tile = BarTile(items: [item(app, name)])
                 return .init(tile: tile, image: image, key: nil,
                              canDrag: BarDrag.canDrag(tile, in: kind, swapped: false, positions: filePositions))
@@ -133,6 +140,47 @@ extension DebugRunner {
             return SnugBarBarController.Group(kind: kind, entries: entries, section: BarDrag.section(of: kind, swapped: false))
         }
         return ([group(.hidden, hidden), group(.alwaysHidden, always), group(.didntFit, didntFit)], positions)
+    }
+}
+
+extension DebugRunner {
+    /// A made-up capture of a menu bar item as the live bar gives it (white content on a dark bar, with the bar's top
+    /// highlight row across the crop), keyed the way the app keys captures. For offscreen renders.
+    static func fakeCapture(symbol: String? = nil, text: String? = nil, width: CGFloat) -> NSImage {
+        let scale: CGFloat = 2, height: CGFloat = 33
+        let w = Int(width * scale), h = Int(height * scale)
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return NSImage() }
+        ctx.setFillColor(CGColor(srgbRed: 0.12, green: 0.12, blue: 0.13, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        // The highlight row, one pixel below the top (CoreGraphics counts rows from the bottom).
+        ctx.setFillColor(CGColor(srgbRed: 0.34, green: 0.34, blue: 0.35, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: h - 2, width: w, height: 1))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+        let bounds = NSRect(x: 0, y: 0, width: w, height: h)
+        if let symbol, let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14 * scale, weight: .regular)
+                .applying(NSImage.SymbolConfiguration(paletteColors: [.white]))) {
+            let size = image.size
+            image.draw(in: NSRect(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2,
+                                  width: size.width, height: size.height))
+        }
+        if let text {
+            let string = NSAttributedString(string: text, attributes: [
+                .font: NSFont.systemFont(ofSize: 13 * scale, weight: .medium), .foregroundColor: NSColor.white,
+            ])
+            let size = string.size()
+            string.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2))
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        guard let raw = ctx.makeImage(), let keyed = GlyphImage.keyed(raw) else { return NSImage() }
+        let image = NSImage(cgImage: keyed.image, size: NSSize(width: CGFloat(keyed.image.width) / scale,
+                                                                height: CGFloat(keyed.image.height) / scale))
+        image.isTemplate = keyed.isTemplate
+        return image
     }
 }
 
